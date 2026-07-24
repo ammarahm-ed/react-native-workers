@@ -1,0 +1,18 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- For UIWorkerDemo.vibrate(). -->
+  <uses-permission android:name="android.permission.VIBRATE" />
+
+  <application>
+    <!--
+      Tracks the foreground Activity from process start, so the demo's UI calls
+      have something to draw on without the app wiring anything up.
+      `authorities` is suffixed with the app's id so two apps (or an app and a
+      test APK) can never collide on the provider authority.
+    -->
+    <provider
+      android:name="com.uiworkerdemo.UIWorkerDemoInitProvider"
+      android:authorities="${applicationId}.uiworkerdemo-init"
+      android:exported="false"
+      android:initOrder="100" />
+  </application>
+</manifest>

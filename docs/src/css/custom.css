@@ -1,0 +1,264 @@
+/**
+ * Global styles. The classic template bundles Infima.
+ *
+ * Theme matched to reactnative.dev — same brand cyan (#61dafb), the
+ * always-dark navbar (#20232a), and the light/dark palettes used by the
+ * React Native website.
+ */
+
+:root {
+  /* reactnative.dev palette */
+  --brand: #61dafb;
+  --dark: #282c34;
+  --deepdark: #20232a;
+  --light: #373940;
+  --text: #1a1a1a;
+  --subtle: #6c707b;
+  --divider: #ececec;
+  --tintColor: #f7f7f7;
+  --navbar-active-item-background: rgba(97, 218, 251, 0.067);
+  --sidebar-active-item-background: #e6f7ff;
+
+  --ifm-color-primary: #06bcee;
+  --ifm-color-primary-dark: #05a9d6;
+  --ifm-color-primary-darker: #059fca;
+  --ifm-color-primary-darkest: #0483a6;
+  --ifm-color-primary-light: #1fc4f0;
+  --ifm-color-primary-lighter: #2cc7f1;
+  --ifm-color-primary-lightest: #52d1f4;
+  --ifm-color-primary-75: rgba(8, 126, 164, 0.8);
+
+  --ifm-font-family-base: 'Optimistic Display', system-ui, -apple-system,
+    'Segoe UI', Roboto, Ubuntu, Cantarell, 'Noto Sans', sans-serif;
+  --ifm-font-size-base: 15px;
+  --ifm-code-font-size: 85%;
+  --ifm-code-background: rgba(0, 0, 0, 0.06);
+  --ifm-code-padding-vertical: 0.05rem;
+  --ifm-global-radius: 9px;
+  --ifm-code-border-radius: 0.4rem;
+  --ifm-alert-border-radius: 20px;
+  --ifm-link-hover-decoration: none;
+  --ifm-color-warning: #ffe564;
+
+  /* Dark navbar in both color modes, like reactnative.dev */
+  --ifm-navbar-background-color: var(--deepdark);
+  --ifm-navbar-link-color: #fff;
+  --ifm-navbar-link-hover-color: #fff;
+  --ifm-navbar-link-active-color: var(--brand);
+  --ifm-navbar-shadow: none;
+  --ifm-navbar-search-input-background-color: rgba(255, 255, 255, 0.1);
+  --ifm-navbar-search-input-color: #fff;
+  --ifm-navbar-search-input-placeholder-color: rgba(255, 255, 255, 0.5);
+
+  --ifm-footer-background-color: var(--deepdark);
+
+  --ifm-menu-color-active: var(--ifm-color-primary-darkest);
+  --ifm-menu-color-background-active: var(--sidebar-active-item-background);
+  --ifm-toc-link-color: var(--ifm-color-emphasis-700);
+
+  --ifm-table-head-color: var(--subtle);
+  --ifm-table-stripe-background: rgba(0, 0, 0, 0.02);
+  --ifm-pre-line-height: 1.6;
+
+  --ifm-hero-background-color: var(--deepdark);
+  --ifm-hero-text-color: #fff;
+
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+}
+
+[data-theme='dark'] {
+  --subtle: #858993;
+  --sidebar-active-item-background: rgba(97, 218, 251, 0.082);
+
+  --ifm-color-primary: #58c4dc;
+  --ifm-color-primary-dark: #3fbbd7;
+  --ifm-color-primary-darker: #2fb7d4;
+  --ifm-color-primary-darkest: #239db8;
+  --ifm-color-primary-light: #71cde1;
+  --ifm-color-primary-lighter: #81d2e4;
+  --ifm-color-primary-lightest: #a4dfec;
+  --ifm-color-primary-75: rgba(88, 196, 220, 0.8);
+
+  --ifm-background-color: #1b1b1d;
+  --ifm-code-background: rgba(255, 255, 255, 0.06);
+  --ifm-toc-border-color: var(--dark);
+  --ifm-color-emphasis-300: var(--dark);
+  --ifm-table-head-background: var(--deepdark);
+  --ifm-table-head-color: var(--subtle);
+  --ifm-table-stripe-background: rgba(0, 0, 0, 0.08);
+
+  --ifm-menu-color-active: var(--ifm-color-primary);
+
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+}
+
+/* ---------------------------------------------------------------------------
+ * Navbar — always dark with brand-cyan title, like reactnative.dev
+ * ------------------------------------------------------------------------- */
+
+.navbar {
+  background-color: var(--deepdark);
+}
+
+.navbar .navbar__title {
+  color: var(--brand);
+  font-weight: 600;
+}
+
+.navbar .navbar__toggle {
+  color: #fff;
+}
+
+.navbar .navbar__link {
+  font-weight: 600;
+  transition: color 0.15s, background-color 0.15s;
+}
+
+.navbar .navbar__link:hover {
+  color: #fff;
+  background-color: var(--navbar-active-item-background);
+  border-radius: var(--ifm-global-radius);
+}
+
+.navbar .navbar__link--active {
+  color: var(--brand);
+}
+
+.navbar .navbar__link--active:hover {
+  color: var(--brand);
+}
+
+/* Keep the color-mode toggle & sidebar close button visible on the dark bar */
+.navbar .clean-btn {
+  color: #fff;
+}
+
+html[data-theme='light'] .navbar-sidebar {
+  background-color: var(--deepdark);
+}
+
+html[data-theme='light'] .navbar-sidebar .menu__link {
+  color: var(--ifm-color-gray-300);
+}
+
+html[data-theme='light'] .navbar-sidebar .menu__link--active {
+  color: var(--brand);
+  background-color: var(--navbar-active-item-background);
+}
+
+/* ---------------------------------------------------------------------------
+ * Docs sidebar — light-blue active pill, like reactnative.dev
+ * ------------------------------------------------------------------------- */
+
+.menu__link {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.menu__link--active:not(.menu__link--sublist) {
+  background-color: var(--sidebar-active-item-background);
+}
+
+/* ---------------------------------------------------------------------------
+ * Content
+ * ------------------------------------------------------------------------- */
+
+/* reactnative.dev caps doc headings below the Docusaurus defaults */
+.markdown h1:first-child {
+  --ifm-h1-font-size: 2.2rem;
+}
+
+.markdown > h2 {
+  --ifm-h2-font-size: 1.6rem;
+}
+
+.markdown > h3 {
+  --ifm-h3-font-size: 1.3rem;
+}
+
+@media (max-width: 576px) {
+  .markdown h1:first-child {
+    --ifm-h1-font-size: 1.8rem;
+  }
+}
+
+.markdown a:not(.hash-link) {
+  color: var(--ifm-color-primary-darkest);
+  border-bottom: 1px solid transparent;
+}
+
+[data-theme='dark'] .markdown a:not(.hash-link) {
+  color: var(--ifm-color-primary);
+}
+
+.markdown a:not(.hash-link):hover {
+  border-bottom-color: var(--ifm-color-primary-75);
+  text-decoration: none;
+}
+
+.hash-link {
+  color: var(--subtle);
+}
+
+/* ---------------------------------------------------------------------------
+ * Footer — deep dark like reactnative.dev
+ * ------------------------------------------------------------------------- */
+
+.footer--dark {
+  background-color: var(--deepdark);
+}
+
+.footer .footer__title {
+  color: #858a96;
+}
+
+.footer .footer__link-item:hover {
+  color: var(--brand);
+  text-decoration: none;
+}
+
+.footer .footer__copyright {
+  color: #858a96;
+  font-size: 14px;
+}
+
+/* ---------------------------------------------------------------------------
+ * Homepage hero — dark section with cyan accents
+ * ------------------------------------------------------------------------- */
+
+.hero--primary {
+  --ifm-hero-background-color: var(--deepdark);
+  --ifm-hero-text-color: #fff;
+  background: var(--deepdark);
+}
+
+.hero--primary .hero__title {
+  color: var(--brand);
+  font-size: 2.2rem;
+}
+
+.hero--primary .hero__subtitle {
+  color: #ebedf0;
+}
+
+.hero--primary .button--secondary {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--deepdark);
+}
+
+.hero--primary .button--secondary:hover {
+  background: #71d6ec;
+  border-color: #71d6ec;
+}
+
+.hero--primary .button--outline.button--secondary {
+  background: transparent;
+  border-color: #4e5668;
+  color: #f6f7f9;
+}
+
+.hero--primary .button--outline.button--secondary:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #fff;
+}

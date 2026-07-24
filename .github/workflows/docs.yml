@@ -1,0 +1,68 @@
+name: Deploy docs
+
+on:
+  push:
+    branches: [main]
+    # The site only depends on the Docusaurus project and the design docs it
+    # links to, so unrelated pushes don't rebuild it.
+    paths:
+      - 'docs/**'
+      - '.github/workflows/docs.yml'
+  # Lets you redeploy from the Actions tab without pushing a commit.
+  workflow_dispatch:
+
+# The deploy job needs to mint an OIDC token for Pages and write the deployment;
+# nothing else in this workflow needs write access.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time. `cancel-in-progress: false` so a queued deploy finishes
+# rather than being dropped mid-publish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      # `docs/` is a standalone npm project with its own lockfile — it is NOT
+      # part of the root Yarn workspace, so it installs independently.
+      - name: Setup Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: docs
+
+      - name: Build site
+        run: npm run build
+        working-directory: docs
+
+      - name: Configure Pages
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
+        with:
+          path: docs/build
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4

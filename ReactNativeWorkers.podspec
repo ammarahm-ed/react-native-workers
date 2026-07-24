@@ -16,5 +16,11 @@ Pod::Spec.new do |s|
   s.source_files = "ios/**/*.{h,m,mm}", "cpp/**/*.{hpp,cpp,c,h}", "ios/generated/*.{h,cpp,mm}"
   s.private_header_files = "ios/**/*.h"
 
+  # Create a second Hermes runtime via hermes::makeHermesRuntime (needs
+  # <hermes/hermes.h> from the hermes-engine pod), and a per-worker
+  # RCTTurboModuleManager from React-NativeModulesApple for platform modules.
+  s.dependency "hermes-engine"
+  s.dependency "React-NativeModulesApple"
+
   install_modules_dependencies(s)
 end

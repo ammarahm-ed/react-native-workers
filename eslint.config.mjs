@@ -24,6 +24,15 @@ export default defineConfig([
     },
   },
   {
+    // The @react-native preset parses everything as script-scoped CommonJS, so
+    // ESM-only syntax (`import.meta`) in standalone Node build scripts trips it.
+    files: ['**/*.mjs'],
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+    },
+  },
+  {
     ignores: ['node_modules/', 'lib/'],
   },
 ]);

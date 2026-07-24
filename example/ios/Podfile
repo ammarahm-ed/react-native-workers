@@ -32,5 +32,43 @@ target 'ReactNativeWorkersExample' do
       :mac_catalyst_enabled => false,
       # :ccache_enabled => true
     )
+
+    # NativeScript interop metadata, regenerated for THIS app by
+    # `scripts/generate-nativescript-metadata.mjs` so it also covers React
+    # Native's own Obj-C classes. `NativeScriptNativeApiModule::bundledMetadataPath`
+    # checks the main bundle before the pod's resource bundle, so dropping the
+    # file at the app bundle root overrides the SDK-only metadata that
+    # @nativescript/react-native ships — no changes inside node_modules.
+    #
+    # The directory is optional: with no generated file the app simply falls
+    # back to the bundled metadata.
+    metadata_phase = '[RN Workers] Copy NativeScript metadata'
+    installer.aggregate_targets.each do |aggregate_target|
+      user_project = aggregate_target.user_project
+      next if user_project.nil?
+
+      changed = false
+      user_project.native_targets.each do |native_target|
+        next unless native_target.name == 'ReactNativeWorkersExample'
+
+        phase = native_target.shell_script_build_phases.find { |p| p.name == metadata_phase }
+        phase ||= native_target.new_shell_script_build_phase(metadata_phase)
+        phase.shell_path = '/bin/sh'
+        phase.shell_script = <<~SCRIPT
+          set -e
+          SRC="${SRCROOT}/nativescript-metadata"
+          DEST="${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}"
+          if [ -d "$SRC" ]; then
+            for f in "$SRC"/*.nsmd; do
+              [ -e "$f" ] || continue
+              echo "note: NativeScript metadata -> $(basename "$f")"
+              cp -f "$f" "$DEST/"
+            done
+          fi
+        SCRIPT
+        changed = true
+      end
+      user_project.save if changed
+    end
   end
 end

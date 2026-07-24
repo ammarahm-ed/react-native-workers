@@ -1,0 +1,54 @@
+buildscript {
+  ext.RNWorkers = [
+    kotlinVersion: "2.0.21",
+    minSdkVersion: 24,
+    compileSdkVersion: 36
+  ]
+
+  ext.getExtOrDefault = { prop ->
+    if (rootProject.ext.has(prop)) {
+      return rootProject.ext.get(prop)
+    }
+
+    return RNWorkers[prop]
+  }
+
+  repositories {
+    google()
+    mavenCentral()
+  }
+
+  dependencies {
+    classpath "com.android.tools.build:gradle:8.7.2"
+    // noinspection DifferentKotlinGradleVersion
+    classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:${getExtOrDefault('kotlinVersion')}"
+  }
+}
+
+apply plugin: "com.android.library"
+apply plugin: "kotlin-android"
+// Applies pre-generated codegen (package.json codegenConfig has
+// includesGeneratedCode: true, so this does NOT re-run codegen) and aligns the
+// react-android dependency version. The C++ TurboModule itself is still linked
+// into the app's `appmodules` via react-native.config.js (cmakeListsPath); this
+// AAR only ships the Kotlin WorkerTurboModules bridge.
+apply plugin: "com.facebook.react"
+
+android {
+  namespace "com.ammarahmed.reactnativeworkers"
+
+  compileSdkVersion getExtOrDefault("compileSdkVersion")
+
+  defaultConfig {
+    minSdkVersion getExtOrDefault("minSdkVersion")
+  }
+
+  compileOptions {
+    sourceCompatibility JavaVersion.VERSION_17
+    targetCompatibility JavaVersion.VERSION_17
+  }
+}
+
+dependencies {
+  implementation "com.facebook.react:react-android"
+}

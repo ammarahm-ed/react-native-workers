@@ -1,20 +1,88 @@
-import { Text, View, StyleSheet } from 'react-native';
-import { multiply } from '@ammarahmed/react-native-workers';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  Text,
+  View,
+  Image,
+  StyleSheet,
+  Pressable,
+  BackHandler,
+  Platform,
+} from 'react-native';
+import HomeScreen from './screens/HomeScreen';
+import { findScreen, type ScreenId } from './screens';
 
-const result = multiply(3, 7);
+/**
+ * Screen to open on launch instead of the home list. Inlined at build time by
+ * the babel config in `babel.config.js` from the `RN_WORKERS_SCREEN` env var, so
+ * a CI/test run can boot straight into the suite:
+ *
+ *   RN_WORKERS_SCREEN=tests yarn start --reset-cache
+ *
+ * The value is baked in when Metro transforms the bundle, so changing it needs a
+ * Metro restart with a cache reset. Empty/absent means "start at home".
+ */
+const INITIAL_SCREEN: string | undefined =
+  process.env.RN_WORKERS_SCREEN || undefined;
 
 export default function App() {
+  // `null` = home. Deep-linking to an unknown id falls back to home rather than
+  // rendering nothing, so a typo in the env var is obvious instead of silent.
+  const [current, setCurrent] = useState<ScreenId | null>(
+    findScreen(INITIAL_SCREEN)?.id ?? null
+  );
+
+  const goHome = useCallback(() => setCurrent(null), []);
+
+  // Android hardware back: leave a screen instead of exiting the app.
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (current == null) return false; // let the OS close the app
+      goHome();
+      return true;
+    });
+    return () => sub.remove();
+  }, [current, goHome]);
+
+  const screen = findScreen(current ?? undefined);
+  const Component = screen?.component;
+
   return (
-    <View style={styles.container}>
-      <Text>Result: {result}</Text>
+    <View style={styles.root}>
+      <View style={styles.header}>
+        {screen && (
+          <Pressable onPress={goHome} hitSlop={12} style={styles.back}>
+            <Text style={styles.backText}>‹ Back</Text>
+          </Pressable>
+        )}
+        {!screen && (
+          // The docs logo, as a PNG so the example needs no react-native-svg
+          // (the SVG's gear animation would not survive the conversion anyway).
+          <Image
+            source={require('./assets/logo.png')}
+            style={styles.logo}
+            resizeMode="contain"
+          />
+        )}
+        <Text style={styles.title}>
+          {screen?.title ?? 'react-native-workers'}
+        </Text>
+      </View>
+      {Component ? <Component /> : <HomeScreen onOpen={setCurrent} />}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
+  root: { flex: 1, paddingTop: 60, backgroundColor: 'white' },
+  header: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    paddingHorizontal: 16,
+    marginBottom: 10,
   },
+  back: { marginRight: 12 },
+  logo: { width: 30, height: 30, marginRight: 10, borderRadius: 6 },
+  backText: { fontSize: 16, color: '#1565c0' },
+  title: { fontSize: 18, fontWeight: '700', flexShrink: 1 },
 });

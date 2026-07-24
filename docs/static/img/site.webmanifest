@@ -1,0 +1,21 @@
+{
+  "name": "react-native-workers",
+  "short_name": "rn-workers",
+  "icons": [
+    {
+      "src": "/react-native-workers/img/android-chrome-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/react-native-workers/img/android-chrome-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ],
+  "start_url": "/react-native-workers/",
+  "scope": "/react-native-workers/",
+  "theme_color": "#06bcee",
+  "background_color": "#ffffff",
+  "display": "standalone"
+}

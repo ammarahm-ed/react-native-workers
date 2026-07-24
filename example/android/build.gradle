@@ -18,4 +18,12 @@ buildscript {
     }
 }
 
+// Some libraries locate react-native by shelling out to `node --print
+// require.resolve(...)`. That fails when node is managed by a version manager
+// (nvm/volta) and so is not on the Gradle daemon's PATH, leaving them with an
+// empty path ("Cannot convert '' to File"). Point them at it explicitly.
+ext {
+    REACT_NATIVE_NODE_MODULES_DIR = file("$rootDir/../node_modules/react-native").absolutePath
+}
+
 apply plugin: "com.facebook.react.rootproject"

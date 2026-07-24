@@ -1,0 +1,135 @@
+// react-native-workers — release worker bundling for Android.
+//
+// Apply this from your app's android/app/build.gradle, AFTER the
+// `com.facebook.react` plugin has been applied and the `react { }` block:
+//
+//     apply from: new File(
+//       ["node", "--print", "require.resolve('@ammarahmed/react-native-workers/package.json')"].execute(null, rootDir).text.trim(),
+//       "../android/worker-bundles.gradle")
+//
+// It registers a `bundle<Variant>WorkerJs` task for every RELEASE variant
+// (debug variants are skipped — Metro serves worker bundles over HTTP in dev),
+// runs the `rn-workers-bundle` CLI to build one standalone bundle per worker,
+// drops them into a generated assets dir, and wires that dir into the variant so
+// the bundles ship inside the APK next to the app's main bundle.
+
+import org.apache.tools.ant.taskdefs.condition.Os
+
+// This script lives at <lib>/android/worker-bundles.gradle; the CLI is a sibling
+// of the android dir, at <lib>/cli/index.js.
+def rnWorkersScriptFile = buildscript.sourceFile
+def rnWorkersLibDir = rnWorkersScriptFile.parentFile.parentFile
+def rnWorkersCli = new File(rnWorkersLibDir, "cli/index.js").absolutePath
+
+// Resolve the node command the same way the RN Gradle plugin does: prefer the
+// `react { nodeExecutableAndArgs = [...] }` config, else fall back to "node".
+def rnWorkersNodeCommand = {
+  try {
+    def reactExt = project.extensions.findByName("react")
+    if (reactExt != null && reactExt.nodeExecutableAndArgs != null &&
+        reactExt.nodeExecutableAndArgs.isPresent()) {
+      return new ArrayList<String>(reactExt.nodeExecutableAndArgs.get())
+    }
+  } catch (ignored) {
+    // fall through
+  }
+  return ["node"]
+}
+
+// The JS project root (where package.json / metro.config.js / .rn-workers live).
+// Mirrors the RN plugin's `react { root }`, defaulting to two levels above the
+// Android app module (…/android/app -> project root).
+def rnWorkersJsRoot = {
+  try {
+    def reactExt = project.extensions.findByName("react")
+    if (reactExt != null && reactExt.root != null && reactExt.root.isPresent()) {
+      return reactExt.root.get().asFile
+    }
+  } catch (ignored) {
+    // fall through
+  }
+  return project.projectDir.parentFile.parentFile
+}
+
+android {
+  // no-op: ensures the android extension exists before we query variants.
+}
+
+afterEvaluate { proj ->
+  def androidExt = proj.extensions.findByName("android")
+  if (androidExt == null || androidExt.applicationVariants == null) {
+    proj.logger.warn("[rn-workers] android application extension not found; " +
+      "worker bundling tasks were not registered.")
+    return
+  }
+
+  androidExt.applicationVariants.all { variant ->
+    def buildTypeName = variant.buildType.name
+    // Skip debug variants — dev workers are fetched from Metro at runtime.
+    if (buildTypeName.toLowerCase().contains("debug")) {
+      return
+    }
+
+    def variantName = variant.name
+    def capVariant = variantName.capitalize()
+    def generatedAssetsDir = proj.layout.buildDirectory
+      .dir("generated/rnworkers/${variantName}").get().asFile
+
+    def nodeCommand = rnWorkersNodeCommand()
+    def jsRoot = rnWorkersJsRoot()
+
+    def workerTask = proj.tasks.register("bundle${capVariant}WorkerJs") { task ->
+      task.group = "react-native-workers"
+      task.description = "Bundle release worker JS for the ${variantName} variant."
+
+      // The worker entry set is resolved dynamically (journal + discovery), so
+      // Gradle cannot reliably fingerprint the inputs. Declare the output dir
+      // and mark the task never-up-to-date, and log that we're doing so.
+      task.outputs.dir(generatedAssetsDir)
+      task.outputs.upToDateWhen { false }
+
+      task.doFirst {
+        task.logger.lifecycle("[rn-workers] ${task.name}: worker entries are " +
+          "resolved at build time; task is intentionally never up-to-date.")
+      }
+
+      task.doLast {
+        generatedAssetsDir.deleteDir()
+        generatedAssetsDir.mkdirs()
+
+        def cmd = []
+        cmd.addAll(nodeCommand)
+        cmd.add(rnWorkersCli)
+        cmd.addAll([
+          "--platform", "android",
+          "--dev", "false",
+          "--out", generatedAssetsDir.absolutePath,
+          "--project-root", jsRoot.absolutePath,
+        ])
+
+        task.logger.lifecycle("[rn-workers] ${task.name}: " + cmd.join(" "))
+        proj.exec {
+          workingDir jsRoot
+          commandLine cmd
+        }
+      }
+    }
+
+    // Register the generated assets so the worker bundles land in the APK.
+    // Prefer the variant-scoped source set; fall back to the build type's.
+    try {
+      androidExt.sourceSets.getByName(variantName).assets.srcDir(generatedAssetsDir)
+    } catch (ignored) {
+      androidExt.sourceSets.getByName(buildTypeName).assets.srcDir(generatedAssetsDir)
+    }
+
+    // Ordering: run after the main JS bundle is produced, and before the assets
+    // for this variant are merged into the APK.
+    proj.tasks.matching { it.name == "createBundle${capVariant}JsAndAssets" }
+      .configureEach { mainBundleTask ->
+        workerTask.configure { it.mustRunAfter(mainBundleTask) }
+      }
+    proj.tasks.matching { it.name == "merge${capVariant}Assets" }
+      .configureEach { it.dependsOn(workerTask) }
+  }
+}

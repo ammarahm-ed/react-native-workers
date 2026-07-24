@@ -10,7 +10,13 @@
       "types": "./lib/typescript/src/index.d.ts",
       "default": "./lib/module/index.js"
     },
-    "./package.json": "./package.json"
+    "./plugin": "./plugin/index.js",
+    "./cli": "./cli/index.js",
+    "./package.json": "./package.json",
+    "./metro": "./metro/index.js"
+  },
+  "bin": {
+    "rn-workers-bundle": "./cli/index.js"
   },
   "files": [
     "src",
@@ -18,6 +24,12 @@
     "android",
     "ios",
     "cpp",
+    "plugin",
+    "cli",
+    "worker-shim",
+    "metro",
+    "scripts",
+    "docs",
     "*.podspec",
     "react-native.config.js",
     "!ios/build",

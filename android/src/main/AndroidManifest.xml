@@ -1,0 +1,15 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application>
+    <!--
+      Captures the application context at process start so release worker
+      bundles can be read from the APK's assets with no app-side setup.
+      `authorities` is suffixed with the app's id so two apps (or an app and a
+      test APK) can never collide on the provider authority.
+    -->
+    <provider
+      android:name="com.ammarahmed.reactnativeworkers.WorkerAssetsInitProvider"
+      android:authorities="${applicationId}.rnworkers-assets-init"
+      android:exported="false"
+      android:initOrder="100" />
+  </application>
+</manifest>

@@ -84,3 +84,9 @@ android/generated
 
 # React Native Nitro Modules
 nitrogen/
+
+# NativeScript interop metadata regenerated for the example app
+# (example/scripts/generate-nativescript-metadata.mjs). ~4.5MB of generated
+# binary per arch; the app falls back to the metadata @nativescript/react-native
+# bundles when it is absent.
+example/ios/nativescript-metadata/
