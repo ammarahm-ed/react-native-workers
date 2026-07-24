@@ -11,7 +11,6 @@ import {
 import { UIWorker } from '@ammarahmed/react-native-workers';
 import {
   createWorkerComponent,
-  installComponentEventBridge,
   type Descriptor,
 } from '../native-components/createWorkerComponent';
 
@@ -82,7 +81,6 @@ export default function NativeComponentScreen() {
       nativeModules: true,
     });
     w.onerror = (e: any) => logRef.current(`worker error: ${e.message}`, 'err');
-    installComponentEventBridge(w);
 
     (async () => {
       try {

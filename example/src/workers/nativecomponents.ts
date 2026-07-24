@@ -56,13 +56,17 @@ class WorkerBadge extends NativeComponent {
 }
 
 /** A real UISwitch: `value` flows down as a native prop, its change event comes
- *  back up over the worker's RPC channel. */
+ *  back up through RN's native event pipeline. */
 class WorkerSwitch extends NativeComponent {
   static props = ['value', 'tint'];
   static events = ['onValueChange'];
 
   create() {
-    const view = UISwitch.alloc().initWithFrame(CGRectMake(0, 0, 51, 31));
+    // `eventView` gives us a UISwitch subclass that captures RN's native event
+    // blocks, so `emit` can deliver `onValueChange` through RN's own pipeline.
+    const view = this.eventView(UISwitch)
+      .alloc()
+      .initWithFrame(CGRectMake(0, 0, 51, 31));
     this.onControl(view, UIControlEvents.ValueChanged, () =>
       this.emit('onValueChange', { value: view.on })
     );
@@ -99,7 +103,9 @@ class WorkerMap extends NativeComponent {
   private annotations = new Map<string, any>(); // pin id -> MKPointAnnotation
 
   create() {
-    const map = MKMapView.alloc().initWithFrame(CGRectMake(0, 0, 320, 320));
+    const map = this.eventView(MKMapView)
+      .alloc()
+      .initWithFrame(CGRectMake(0, 0, 320, 320));
     map.showsUserLocation = false;
 
     // A real MKMapViewDelegate, its methods written in JS as arrow functions so

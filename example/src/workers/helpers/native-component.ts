@@ -12,13 +12,13 @@
 //     reads. RN then calls our `-set_<name>:forView:withDefaultView:` custom
 //     setter with the value. No RPC for props.
 //
-//   • Events use the worker's RPC channel. RN's event pipeline hands the view an
-//     `RCTBubblingEventBlock` to call, but NativeScript can't invoke a
-//     native-origin block (it has no metadata signature for it), so we route
-//     events over the bridge instead, keyed by the mounted view's React tag.
+//   • Events also flow through RN's OWN pipeline. RN hands the view a native
+//     `RCTBubblingEventBlock`; NativeScript can't call it directly (no metadata
+//     signature), so we invoke it through the Obj-C runtime instead — see the
+//     "Native events" section below. No RPC for events.
 //
-// The objc-runtime C functions (`sel_registerName`, `class_addMethod`, …) are all
-// in the regenerated interop metadata.
+// The objc-runtime C functions (`sel_registerName`, `class_addMethod`,
+// `imp_implementationWithBlock`, …) are all in the regenerated interop metadata.
 import NativeScript from '@nativescript/react-native';
 
 declare const parent: any;
@@ -47,11 +47,24 @@ export abstract class NativeComponent {
   /** Teardown when React unmounts. */
   dispose(): void {}
 
-  /** Fire an event to the matching `on<Event>` React prop; `payload` → `nativeEvent`. */
+  /** Fire an event to the matching `on<Event>` React prop; `payload` → `nativeEvent`.
+   *  Goes through RN's own native event pipeline — no bridge. Requires the view to
+   *  have been built with `eventView()` so RN's dispatching block was captured. */
   emit(event: string, payload: Props = {}): void {
-    parent
-      .module('host')
-      .dispatchEvent({ tag: reactTag(this.view), event, payload });
+    const handler = eventHandlers.get(this.view)?.[event];
+    // No handler yet means React hasn't attached an `on<Event>` prop — like a
+    // native component with no listener, the event is simply dropped.
+    if (handler) fireNativeBlock(handler, payload);
+  }
+
+  /** The view class to build in `create()` so this component's declared `events`
+   *  are delivered through RN's native pipeline:
+   *  `const view = this.eventView(UISwitch).alloc().initWithFrame(…)`. */
+  eventView(Base: any): any {
+    return defineEventView(
+      Base,
+      (this.constructor as ComponentClass).events ?? []
+    );
   }
 
   /** Wire a UIControl event to a callback for this instance's lifetime. */
@@ -90,15 +103,6 @@ const instances = new WeakMap<any, NativeComponent>(); // view → instance
 const propState = new WeakMap<any, Props>(); // view → accumulated props
 const registered = new Map<string, Descriptor>();
 
-/** The React tag of the interop wrapper hosting our view — for event routing. */
-function reactTag(view: any): number | null {
-  for (let v = view; v; v = v.superview) {
-    const tag = v.tag;
-    if (tag && tag > 0) return tag;
-  }
-  return null;
-}
-
 /**
  * Native props arrive as Obj-C values (an `NSArray` for `pins`, `NSNumber` for a
  * bool, …). NativeScript passes primitives through as JS values already;
@@ -129,6 +133,71 @@ function promoteToClassMethod(cls: any, selector: string): void {
     g.method_getImplementation(method),
     g.method_getTypeEncoding(method)
   );
+}
+
+// ── Native events via the Obj-C runtime ───────────────────────────────────
+// RN's event pipeline hands the *view* a native-origin `RCTBubblingEventBlock`
+// through a `set<Event>:` setter. NativeScript can't *call* that block directly
+// (a runtime-supplied block has no metadata signature to build a call from), but
+// the Obj-C runtime can: `imp_implementationWithBlock` turns a real native block
+// into a method IMP, and messaging that method invokes the block. So we
+//   (a) CAPTURE RN's block by giving the view `set<Event>:` methods (added with
+//       `extend` — a supported inbound conversion that yields a JS wrapper still
+//       carrying the raw block pointer), then
+//   (b) FIRE it by promoting that raw pointer to an IMP on the payload dict's
+//       class and sending the selector, so the runtime calls `block(payloadDict)`.
+// The event then flows through RN's own dispatcher to the React `on<Event>` prop —
+// no bridge, identical to a codegen'd native component's events.
+const eventHandlers = new WeakMap<any, Record<string, any>>(); // view → { event: RN block }
+let classCounter = 0;
+let fireSel: any;
+const eventViewCache = new Map<string, any>();
+
+function eventSetter(event: string): string {
+  return `set${event[0]!.toUpperCase()}${event.slice(1)}:`; // onValueChange → setOnValueChange:
+}
+
+/** A subclass of `Base` that captures RN's dispatching block for each event. RN's
+ *  `createEventSetter` KVC-calls `set<Event>:` on the view; the block arrives as a
+ *  JS wrapper we stash keyed by the view. Cached per (base, events). */
+export function defineEventView(Base: any, events: string[]): any {
+  if (!events.length) return Base;
+  const key = `${Base?.name ?? '?'}:${events.join(',')}`;
+  let Sub = eventViewCache.get(key);
+  if (Sub) return Sub;
+  const methods: Record<string, any> = {};
+  const exposed: Record<string, any> = {};
+  for (const event of events) {
+    const selector = eventSetter(event); // one colon = one param
+    methods[selector] = function (this: any, handler: any) {
+      let map = eventHandlers.get(this);
+      if (!map) eventHandlers.set(this, (map = {}));
+      map[event] = handler;
+    };
+    exposed[selector] = { returns: objcVoid, params: [g.NSObject] };
+  }
+  Sub = Base.extend(methods, {
+    name: `RNWEventView_${classCounter++}`,
+    exposedMethods: exposed,
+  });
+  eventViewCache.set(key, Sub);
+  return Sub;
+}
+
+/** Fire a native-origin block via the Obj-C runtime. A block's first argument is
+ *  its own receiver, so we message the payload dict — the runtime calls
+ *  `block(payloadDict)`. */
+function fireNativeBlock(handler: any, payload: Props): void {
+  const body = NSMutableDictionary.alloc().init();
+  for (const key of Object.keys(payload))
+    body.setObjectForKey(payload[key], key as any);
+  // Pass the RAW block pointer, not the JS wrapper — imp_implementationWithBlock
+  // does _Block_copy, which only works on a real native block.
+  const raw = handler.__nativeApiPointerObject ?? handler;
+  const imp = g.imp_implementationWithBlock(raw);
+  if (!fireSel) fireSel = g.sel_registerName('rnw__fireEvent');
+  g.class_replaceMethod(g.object_getClass(body), fireSel, imp, 'v@:');
+  (body as any).performSelector(fireSel);
 }
 
 let TargetClass: any;
@@ -194,6 +263,14 @@ export function registerComponents(classes: ComponentClass[]): Descriptor[] {
         params: [NSObject, NSObject, NSObject],
       };
     }
+    // Events: declare each as a plain RCTBubblingEventBlock (NOT __custom__), so RN
+    // builds its event setter and hands the *view* a dispatching block via
+    // `set<Event>:` — which `installEventSetters` captures.
+    for (const event of events) {
+      methods[`propConfig_${event}`] = () =>
+        NSArray.arrayWithArray(['RCTBubblingEventBlock']);
+      exposed[`propConfig_${event}`] = { returns: NSObject, params: [] };
+    }
 
     const Manager = g.RCTViewManager.extend(methods, {
       name: `${name}Manager`,
@@ -201,6 +278,8 @@ export function registerComponents(classes: ComponentClass[]): Descriptor[] {
     });
     for (const prop of props)
       promoteToClassMethod(Manager, `propConfig_${prop}`);
+    for (const event of events)
+      promoteToClassMethod(Manager, `propConfig_${event}`);
 
     g.RCTRegisterModule(Manager);
     registered.set(name, { name, props, events });

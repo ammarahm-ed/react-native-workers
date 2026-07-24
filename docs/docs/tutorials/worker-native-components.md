@@ -57,8 +57,9 @@ JS. So from worker JavaScript we can do everything the native manager would:
 4. **respond** to the view's events.
 
 React Native then treats the result as a genuine component. Props ride RN's **own
-native prop pipeline**; only events come back over the worker's RPC channel (for a
-reason we'll get to in Step 5). Let's build it.
+native prop pipeline** and events ride its **own event pipeline** — nothing crosses
+the worker's RPC bridge at runtime (it's used once, at startup, to fetch the list of
+components). Let's build it.
 
 ## Step 1: a component is a class
 
@@ -207,34 +208,44 @@ wrapper does nothing but forward the prop:
 Style and layout still go through Yoga natively, and the `RCTView` props the manager
 inherits (`backgroundColor`, `opacity`, …) keep working the native way.
 
-## Step 5: events come back over RPC
+## Step 5: events go up natively too
 
-Events go the other way, over the worker's [RPC channel](../rpc/jsmodule-bridge).
-`this.emit()` sends the event to the host, which delivers it to the matching
-`on<Event>` callback prop:
+Events flow through React Native's **own** event pipeline — no bridge. RN hands the
+view a native dispatching block through a `set<Event>:` setter; we capture that block
+and, when the control fires, invoke it. The one wrinkle: NativeScript can't *call* a
+runtime-supplied native block directly, so we let the Obj-C runtime do it. The helper
+handles this — components just declare `static events` and call `this.emit()`:
 
 ```ts
-// worker: emit() fires an event to the host, keyed by the view's React tag
-emit(event, payload = {}) {
-  parent.module('host').dispatchEvent({ tag: reactTag(this.view), event, payload });
+// build the view so RN's event blocks are captured, then emit normally:
+create() {
+  const view = this.eventView(UISwitch).alloc().initWithFrame(CGRectMake(0, 0, 51, 31));
+  this.onControl(view, UIControlEvents.ValueChanged, () =>
+    this.emit('onValueChange', { value: view.on })
+  );
+  return view;
 }
 ```
 
-```tsx
-// host: installComponentEventBridge(worker) routes it to the right instance's callback
-worker.registerModule('host', {
-  dispatchEvent({ tag, event, payload }) {
-    eventTargets.get(tag)?.(event, payload);   // → props.onValueChange({ nativeEvent: payload })
-  },
-});
-```
-
-The payload arrives as `{ nativeEvent: payload }`, so a worker component's event
-handler reads **exactly** like a native one:
+`this.emit('onValueChange', payload)` invokes RN's dispatching block, RN's event
+system routes it, and the payload arrives at the React callback as
+`{ nativeEvent: payload }` — **exactly** like a native component's event:
 
 ```tsx
 <WorkerSwitch onValueChange={(e) => setOn(e.nativeEvent.value)} />
 ```
+
+On the host, the only extra step is telling RN about the event names, which
+`createWorkerComponent` does from the descriptor (a `bubblingEventTypes` entry per
+`on<Event>`); the `on*` callbacks then pass straight through to the view.
+
+:::note[How the block gets invoked]
+NativeScript refuses to call a native block it was handed at runtime (it has no
+metadata signature to build the call from). The Obj-C runtime has no such
+limitation: `imp_implementationWithBlock` turns the block into a method IMP, and
+messaging that method invokes it. The helper captures RN's block via `eventView()`
+and fires it this way — you never see any of it.
+:::
 
 ## Step 6: use it like any component
 
@@ -242,7 +253,6 @@ Put it together on the host:
 
 ```tsx title="screens/NativeComponentScreen.tsx"
 const w = new UIWorker('../workers/nativecomponents', { nativeModules: true });
-installComponentEventBridge(w);
 
 await w.ready('nativecomponents', 8000);
 const descriptors = await w.module('nativecomponents').list(); // one-time query
@@ -257,22 +267,21 @@ const WorkerSwitch = createWorkerComponent(descriptors.find(d => d.name === 'Wor
 />
 ```
 
-`value` flows down as a native prop; the change event comes back up over RPC to
-React state — the whole loop running through the worker, on the main thread.
+`value` flows down as a native prop; the change event comes back up through RN's
+native event pipeline to React state — the whole loop running through the worker, on
+the main thread, with no bridge in either direction.
 
-## Why props are native and events are RPC
+## It's native the whole way
 
-Native props are the better default: they ride React Native's own pipeline, so
-several prop changes in one render batch into a single update, and they need no
-extra channel of their own. Events use RPC simply because that's the direction the
-native pipeline can't cover here — so we send them back over the worker bridge, and
-deliver them as `{ nativeEvent }` so handlers still look native.
+Both directions ride React Native's own pipelines: props go down RN's prop pipeline
+(batched into each commit), events come up RN's event pipeline (delivered as
+`{ nativeEvent }`). Nothing crosses the worker's RPC bridge at runtime — the bridge
+is used only **once**, to fetch the component descriptors at startup.
 
-Performance-wise the two are close: both cross the JS-thread → UI-thread boundary
-exactly once, which is the part that actually costs. The only time a plain RPC (or
-[`SharedValue`](../shared-data/shared-value)) call beats a native prop is a single
-value updating very fast — a slider dragging one number at 60fps. For everything
-else, keep props native.
+That means a worker-defined component behaves like a codegen'd one: props are
+batched with reconciliation, events dispatch through RN's own event system, and both
+cross the JS-thread → UI-thread boundary exactly once (the cost that actually
+matters). No per-prop or per-event message, no tag bookkeeping.
 
 ## The reusable pieces
 
@@ -284,16 +293,15 @@ small helpers.
 
 | Export | What it does |
 | --- | --- |
-| `class NativeComponent` | The base class: declare `static props` / `static events` (and optional `static componentName`), implement `create()` / `update(props)` / `dispose()`. Gives you `this.view`, plus `emit(event, payload)`, `onControl(control, events, cb)`, and `delegate(protocols, methods)` for building Obj-C delegates from JS. One instance per mounted view. |
-| `registerComponents(classes)` | For each class, builds a runtime `RCTViewManager` subclass: a `-view` method, and per declared prop the metadata + setter RN needs to send it down natively. Registers it with `RCTRegisterModule`, remembers `name → descriptor` (re-registering the same name is a no-op), and returns the descriptors. |
-| `serveComponents()` | Registers the `nativecomponents` RPC module with a single `list()` that returns the descriptors — a one-time host query, not a per-prop channel. |
+| `class NativeComponent` | The base class: declare `static props` / `static events` (and optional `static componentName`), implement `create()` / `update(props)` / `dispose()`. Gives you `this.view`, plus `emit(event, payload)`, `eventView(Base)` (the view class to build so RN's event blocks are captured), `onControl(control, events, cb)`, and `delegate(protocols, methods)` for Obj-C delegates from JS. One instance per mounted view. |
+| `registerComponents(classes)` | For each class, builds a runtime `RCTViewManager` subclass: a `-view` method, per declared prop the metadata + setter RN needs to send it down natively, and per declared event the `RCTBubblingEventBlock` propConfig RN needs to wire it up. Registers it with `RCTRegisterModule`, remembers `name → descriptor` (re-registering the same name is a no-op), and returns the descriptors. |
+| `serveComponents()` | Registers the `nativecomponents` RPC module with a single `list()` that returns the descriptors — a one-time host query, not a runtime channel. |
 
 **Host side — `native-components/createWorkerComponent.tsx`:**
 
 | Export | What it does |
 | --- | --- |
-| `createWorkerComponent(descriptor)` | Returns a React component. Resolves the host view via `NativeComponentRegistry.get` (using the descriptor's props as `validAttributes`), splits `on*` callbacks from native props, forwards the native props straight to the host view, and registers the callbacks by React tag so events reach them. |
-| `installComponentEventBridge(worker)` | Registers the host-side `host` RPC module so a worker `emit()` reaches the right mounted instance's callback prop, routed by tag, delivered as `{ nativeEvent }`. Call once per worker. |
+| `createWorkerComponent(descriptor)` | Returns a React component. Resolves the host view via `NativeComponentRegistry.get` (props → `validAttributes`, events → `bubblingEventTypes`) and forwards all props and `on*` callbacks straight to it — RN drives both natively. |
 
 To add a **new** component you write only a new `NativeComponent` subclass (declaring
 its `props`/`events`) and drop it into `registerComponents([...])`. The helpers don't
@@ -303,8 +311,8 @@ change — that's the whole idea.
 
 Three things happen: the worker **registers** a view manager with RN (once); the
 host **mounts** the component, which drives RN to call the worker's `create()`; and
-at runtime **props flow down natively** and **events flow up over RPC**, keyed by the
-view's React tag.
+at runtime **props flow down** and **events flow up**, both through RN's own native
+pipelines.
 
 ```mermaid
 flowchart TB
@@ -312,42 +320,40 @@ flowchart TB
     WC["class WorkerSwitch<br/>static props / events<br/>create() / update()"]
     WR["registerComponents()"]
     WM["RCTViewManager.extend<br/>+ propConfig class methods<br/>+ RCTRegisterModule"]
-    WS["serveComponents()<br/>RPC: list()"]
-    WV["create() builds UISwitch"]
-    WE["emit('onValueChange', {value})"]
+    WV["create() builds UISwitch<br/>(eventView captures RN's block)"]
+    WE["emit('onValueChange', {value})<br/>→ invoke RN's block"]
   end
 
   subgraph RN["React Native core"]
     RG["RCTGetModuleClasses()"]
     RI["isSupported 'WorkerSwitch'<br/>→ WorkerSwitchManager"]
-    RM["Fabric mounts interop view<br/>(React tag stamped on it)"]
+    RM["Fabric mounts interop view"]
     RV["coordinator calls -view"]
     RP["prop change → set_value:forView:"]
+    RE["event dispatcher"]
   end
 
   subgraph H["Host — JS thread"]
     HR["createWorkerComponent(descriptor)"]
-    HG["NativeComponentRegistry.get<br/>(static view config)"]
+    HG["NativeComponentRegistry.get<br/>props → validAttributes<br/>events → bubblingEventTypes"]
     HJ["render the WorkerSwitch element"]
-    HB["installComponentEventBridge<br/>host module"]
   end
 
   WC --> WR --> WM --> RG
-  WM --> WS
   HR --> HG
   HJ --> HG --> RM --> RI
   RI -. name matches .-> WM
   RM --> RV --> WV --> WC
   HJ -- "props down: native pipeline" --> RP --> WC
-  WE -- "event up: parent.module('host').dispatchEvent" --> HB --> HJ
+  WE -- "event up: native block" --> RE --> HJ
 ```
 
 Read it as three passes: the **registration** path (`WorkerSwitch` →
 `registerComponents` → `RCTRegisterModule` → `RCTGetModuleClasses`), the **mount**
 path (render → `NativeComponentRegistry.get` → Fabric → `-view` → your `create()`),
-and the two runtime **channels** — props down through RN's native `set_<name>:`
-setter into your `update()`, and events up through the host `host` module back to
-your callback prop.
+and the two runtime channels — props down through RN's native `set_<name>:` setter
+into your `update()`, and events up through RN's own event dispatcher back to your
+callback prop.
 
 ## Why the persistent UIWorker runtime matters
 
@@ -389,18 +395,21 @@ full `MKMapView` whose `MKMapViewDelegate` is written in JS via
 pin-selection and region-change callbacks, and struct-based camera control
 (`CLLocationCoordinate2DMake`, `MKCoordinateRegionMakeWithDistance`). Its `lat`,
 `lng`, `radius`, `mapType`, and `pins` are all native props that move the camera and
-the annotations; the map's own `onSelectPin` / `onRegionChange` come back over RPC.
-Building a delegate from JS is the single hardest thing in Objective-C interop, and
-it's a few lines here. See `workers/nativecomponents.ts` for the full component.
+the annotations; the map's own `onSelectPin` / `onRegionChange` come back up RN's
+native event pipeline. Building a delegate from JS is the single hardest thing in
+Objective-C interop, and it's a few lines here. See `workers/nativecomponents.ts` for
+the full component.
 
 ## What to take away
 
 - A `UIWorker` + full Obj-C interop lets you register a **real** RN view manager at
   runtime, entirely in JS — no native module, codegen, or podspec.
-- **Props are native** — they ride RN's own commit/mount pipeline, batched and
-  integrated with reconciliation.
-- **Events come back over RPC**, delivered as `{ nativeEvent }` so handlers read just
-  like a native component's.
+- **Props and events are both native** — props ride RN's commit/mount pipeline
+  (batched with reconciliation), events ride RN's event dispatcher (delivered as
+  `{ nativeEvent }`). The RPC bridge is used only once at startup, to list the
+  components.
+- Events work because the Obj-C runtime can invoke RN's native event block
+  (`imp_implementationWithBlock`) even though NativeScript can't call it directly.
 - It only works because the worker runtime is **persistent** — permanent native
   registration demands a permanent runtime.
 - It's iOS-only and experimental, but it shows the ceiling of what worker-driven

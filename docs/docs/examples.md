@@ -257,9 +257,9 @@ runtime (via NativeScript's `extend`) whose `-view` returns your `create()`, add
 and calls `RCTRegisterModule` — which is exactly what puts it in the list React
 Native's legacy-interop layer scans. On the host,
 `createWorkerComponent(descriptor)` resolves it through
-`NativeComponentRegistry.get`. **Props ride React Native's own native pipeline**, and
-**events come back over the worker's RPC channel** (keyed by React tag). It's used
-like any component from a native library:
+`NativeComponentRegistry.get`. **Props and events both ride React Native's own native
+pipelines** — nothing crosses the worker's RPC bridge at runtime. It's used like any
+component from a native library:
 
 ```tsx
 <WorkerMap
@@ -277,8 +277,8 @@ struct-based camera control, all in worker JavaScript.
 **Shows:** [UIWorker](./guides/ui-worker) as a persistent host for a component
 library (this is the example that motivates the shared-runtime default — the view
 managers register once and survive navigation), runtime native-component
-registration, native props via runtime `propConfig` class methods, and events over
-the worker's RPC channel.
+registration, and native props **and** events through React Native's own pipelines
+(the latter by invoking RN's event block through the Obj-C runtime).
 
 **Build it step by step:** [Native components in JS](./tutorials/worker-native-components)
 — a detailed walk-through of the helpers, the flow, and the wiring.
