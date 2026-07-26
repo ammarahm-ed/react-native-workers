@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/static/img/workers.png" alt="" width="120" height="120" />
+<img src="https://raw.githubusercontent.com/ammarahm-ed/react-native-workers/HEAD/docs/static/img/logo.svg" alt="" width="120" height="120" />
 
 # React Native Workers
 

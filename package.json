@@ -1,6 +1,6 @@
 {
   "name": "@ammarahmed/react-native-workers",
-  "version": "1.0.0-alpha.0",
+  "version": "1.0.0-alpha.1",
   "description": "React Native Workers Runtime",
   "main": "./lib/module/index.js",
   "types": "./lib/typescript/src/index.d.ts",
@@ -69,14 +69,14 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ammarahm-ed/ammarahmed-react-native-workers.git"
+    "url": "git+https://github.com/ammarahm-ed/react-native-workers.git"
   },
   "author": "Ammar Ahmed <ammarahmed6506@gmail.com> (https://github.com/ammarahm-ed)",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/ammarahm-ed/ammarahmed-react-native-workers/issues"
+    "url": "https://github.com/ammarahm-ed/react-native-workers/issues"
   },
-  "homepage": "https://github.com/ammarahm-ed/ammarahmed-react-native-workers#readme",
+  "homepage": "https://github.com/ammarahm-ed/react-native-workers#readme",
   "publishConfig": {
     "registry": "https://registry.npmjs.org/"
   },
