@@ -419,6 +419,24 @@ function frameworkDefaults(ctx) {
   };
 }
 
+// Locate the package that supplies Metro's default config for this app.
+//
+// A bare React Native app has `@react-native/metro-config`. An **Expo** app does
+// NOT — Expo ships its own (`expo/metro-config`), and its metro.config.js calls
+// that one. Requiring the React Native package unconditionally is what made this
+// CLI fail on every Expo project with "Cannot find module
+// '@react-native/metro-config'".
+function loadDefaultConfigProvider(projectRoot) {
+  for (const name of ['@react-native/metro-config', 'expo/metro-config']) {
+    try {
+      return { name, mod: reqFrom(projectRoot, name) };
+    } catch (_e) {
+      // Try the next one.
+    }
+  }
+  return null;
+}
+
 async function loadAppMetroConfig(projectRoot, opts) {
   const { loadConfigAsync } = reqFrom(
     projectRoot,
@@ -429,14 +447,25 @@ async function loadAppMetroConfig(projectRoot, opts) {
     selectedPlatform: opts.platform,
   });
 
-  const RNMetroConfig = reqFrom(projectRoot, '@react-native/metro-config');
   const metro = reqFrom(projectRoot, 'metro');
 
-  // Prime @react-native/metro-config exactly like the community CLI does so the
-  // resulting config matches the main bundle's.
-  RNMetroConfig.getDefaultConfig(ctx.root);
-  if (typeof RNMetroConfig.setFrameworkDefaults === 'function') {
-    RNMetroConfig.setFrameworkDefaults(frameworkDefaults(ctx));
+  const provider = loadDefaultConfigProvider(projectRoot);
+  if (provider) {
+    // Prime the default-config module the same way the app's own bundling step
+    // does, so worker bundles come out of the same pipeline as the main bundle.
+    provider.mod.getDefaultConfig(ctx.root);
+    // React Native-only hook (adds the InitializeCore prelude and the out-of-tree
+    // platform list). Expo's module has no equivalent because its own
+    // getDefaultConfig already applies them.
+    if (typeof provider.mod.setFrameworkDefaults === 'function') {
+      provider.mod.setFrameworkDefaults(frameworkDefaults(ctx));
+    }
+  } else {
+    console.error(
+      'rn-workers-bundle: no metro default-config package found ' +
+        '(@react-native/metro-config or expo/metro-config); using the ' +
+        "project's metro.config.js as-is."
+    );
   }
 
   const config = await metro.loadConfig({
@@ -463,23 +492,104 @@ function hermesOsBin() {
 }
 
 // Best-effort hermesc discovery, following the same locations react-native-xcode.sh
-// and the RN Gradle plugin look at. Returns a path or null.
+// and the RN Gradle plugin (detectOSAwareHermesCommand) look at. Returns a path
+// or null.
+//
+// ORDER MATTERS, and not just for tidiness. Hermes bytecode is version-locked to
+// the runtime that loads it, so the compiler MUST come from the same React
+// Native as the app. Anything the app itself ships is therefore tried before
+// anything node resolution might find: in a monorepo, a bare
+// `require.resolve('hermes-compiler')` from an app whose own node_modules lacks
+// it walks UP and silently returns a different React Native's compiler, which
+// produces worker bundles the app's Hermes refuses to load.
+//
+// Layouts, newest first:
+//   * RN >= 0.86 — the `hermes-compiler` npm package, a sibling of react-native.
+//   * RN <= 0.85 — `react-native/sdks/hermesc/<os>-bin/`.
+//   * Building Hermes from source — `react-native/sdks/hermes/build/bin/`.
 function locateHermesc(projectRoot, reactNativePath) {
   const bin = process.platform === 'win32' ? 'hermesc.exe' : 'hermesc';
-  const candidates = [
+
+  // Resolve `hermes-compiler` starting from a given directory, or null.
+  const npmCompilerFrom = (from) => {
+    if (!from) return null;
+    try {
+      return path.join(
+        path.dirname(
+          require.resolve('hermes-compiler/package.json', { paths: [from] })
+        ),
+        'hermesc',
+        hermesOsBin(),
+        bin
+      );
+    } catch (_e) {
+      return null;
+    }
+  };
+
+  const candidates = [];
+
+  // 1. Whatever the app's OWN react-native carries. These paths are inside
+  //    reactNativePath, so they cannot come from a different RN copy.
+  if (reactNativePath) {
+    candidates.push(
+      path.join(reactNativePath, 'sdks/hermesc', hermesOsBin(), bin),
+      path.join(reactNativePath, 'sdks/hermes/build/bin', bin),
+      // A sibling of react-native — same install, so still the app's own.
+      npmCompilerFrom(reactNativePath)
+    );
+  }
+
+  // 2. The project's own node_modules, by explicit path (no upward walk).
+  candidates.push(
     path.join(
       projectRoot,
       'node_modules/react-native/sdks/hermesc',
       hermesOsBin(),
       bin
     ),
-    reactNativePath &&
-      path.join(reactNativePath, 'sdks/hermesc', hermesOsBin(), bin),
-  ].filter(Boolean);
+    path.join(
+      projectRoot,
+      'node_modules/react-native/sdks/hermes/build/bin',
+      bin
+    ),
+    path.join(
+      projectRoot,
+      'node_modules/hermes-compiler/hermesc',
+      hermesOsBin(),
+      bin
+    )
+  );
+
+  // 3. Last resort: normal node resolution from the project, which MAY walk up
+  //    to a hoisted copy. Only reached when the app ships no compiler of its
+  //    own, and the caller logs the path it settled on.
+  candidates.push(npmCompilerFrom(projectRoot));
+
   for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) return candidate;
+    if (candidate && fs.existsSync(candidate)) return candidate;
   }
   return null;
+}
+
+// Hermes bytecode file magic (little-endian 0x1F1903C103BC1FC6), the same value
+// Hermes itself sniffs for in evaluateJavaScript to pick the HBC path. We check
+// it so the build can *state* whether a worker shipped as bytecode rather than
+// leaving it to be discovered at runtime.
+const HBC_MAGIC = Buffer.from([0xc6, 0x1f, 0xbc, 0x03, 0xc1, 0x03, 0x19, 0x1f]);
+
+function isHermesBytecode(filePath) {
+  let fd;
+  try {
+    fd = fs.openSync(filePath, 'r');
+    const head = Buffer.alloc(HBC_MAGIC.length);
+    const read = fs.readSync(fd, head, 0, head.length, 0);
+    return read === HBC_MAGIC.length && head.equals(HBC_MAGIC);
+  } catch (_e) {
+    return false;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
 }
 
 // Compile a JS bundle to Hermes bytecode in place (keeps the .jsbundle name so
@@ -613,6 +723,19 @@ async function main() {
     hermesc = locateHermesc(projectRoot, config.reactNativePath);
     if (hermesc) {
       console.error(`rn-workers-bundle: found hermesc at ${hermesc}`);
+      // Bytecode is version-locked to the runtime. A compiler from outside the
+      // app's own tree is usually a hoisted copy belonging to a different React
+      // Native, and the bundles it emits will fail to load at runtime — a
+      // failure that only shows up on device, so say so at build time.
+      if (
+        !path.resolve(hermesc).startsWith(path.resolve(projectRoot) + path.sep)
+      ) {
+        console.error(
+          'rn-workers-bundle: WARNING that hermesc is outside this project. If it ' +
+            'belongs to a different React Native version, the worker bundles it ' +
+            'produces will not load. Pass --hermes <path> to pin the right one.'
+        );
+      }
     }
   }
   if (hermesc) {
@@ -620,7 +743,11 @@ async function main() {
       const bundlePath = path.join(outDir, workerAssetName(entry.id));
       try {
         compileHermes(hermesc, bundlePath, args.dev);
-        console.error(`rn-workers-bundle: hermes-compiled ${entry.id}`);
+        const size = fs.statSync(bundlePath).size;
+        console.error(
+          `rn-workers-bundle: hermes-compiled ${entry.id} ` +
+            `(${isHermesBytecode(bundlePath) ? 'bytecode' : 'PLAIN JS — magic missing'}, ${size} bytes)`
+        );
       } catch (e) {
         if (args.hermesExplicit) {
           // Explicit request — treat as fatal.
@@ -637,10 +764,20 @@ async function main() {
   } else if (args.hermesExplicit) {
     throw new Error(`--hermes path not found: ${args.hermes}`);
   } else {
+    // Worth shouting about: the app's own bundle is almost certainly bytecode
+    // here, so plain-JS workers are an inconsistency, not a deliberate choice.
     console.error(
-      'rn-workers-bundle: hermesc not located; leaving plain JS bundles.'
+      'rn-workers-bundle: WARNING hermesc not located; leaving plain JS bundles. ' +
+        'Pass --hermes <path> if this build uses Hermes.'
     );
   }
+
+  const byteCoded = entries.filter((entry) =>
+    isHermesBytecode(path.join(outDir, workerAssetName(entry.id)))
+  ).length;
+  console.error(
+    `rn-workers-bundle: ${byteCoded}/${entries.length} worker bundle(s) are Hermes bytecode.`
+  );
 
   // 5. Emit the worker manifest (id -> asset name).
   fs.writeFileSync(

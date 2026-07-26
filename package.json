@@ -1,6 +1,6 @@
 {
   "name": "@ammarahmed/react-native-workers",
-  "version": "0.1.0",
+  "version": "1.0.0-alpha.0",
   "description": "React Native Workers Runtime",
   "main": "./lib/module/index.js",
   "types": "./lib/typescript/src/index.d.ts",
@@ -13,7 +13,10 @@
     "./plugin": "./plugin/index.js",
     "./cli": "./cli/index.js",
     "./package.json": "./package.json",
-    "./metro": "./metro/index.js"
+    "./metro": "./metro/index.js",
+    "./app.plugin.js": "./app.plugin.js",
+    "./scripts/*": "./scripts/*",
+    "./android/worker-bundles.gradle": "./android/worker-bundles.gradle"
   },
   "bin": {
     "rn-workers-bundle": "./cli/index.js"
@@ -29,15 +32,19 @@
     "worker-shim",
     "metro",
     "scripts",
-    "docs",
     "*.podspec",
+    "app.plugin.js",
+    "expo-module.config.json",
     "react-native.config.js",
     "!ios/build",
+    "!ios/generated",
     "!android/build",
+    "!android/generated",
     "!android/gradle",
     "!android/gradlew",
     "!android/gradlew.bat",
     "!android/local.properties",
+    "!scripts/matrix.mjs",
     "!**/__tests__",
     "!**/__fixtures__",
     "!**/__mocks__",
@@ -50,6 +57,7 @@
     "typecheck": "tsc",
     "lint": "eslint \"**/*.{js,ts,tsx}\"",
     "test": "jest",
+    "matrix": "node scripts/matrix.mjs",
     "release": "release-it --only-version",
     "web": "vite",
     "build:web": "vite build"
@@ -77,11 +85,12 @@
     "@eslint/compat": "^2.1.0",
     "@eslint/eslintrc": "^3.3.5",
     "@eslint/js": "^10.0.1",
+    "@expo/config-plugins": "~54.0.5",
     "@jest/globals": "^29.7.0",
     "@react-native-community/cli": "20.1.0",
-    "@react-native/babel-preset": "0.85.0",
-    "@react-native/eslint-config": "0.85.0",
-    "@react-native/jest-preset": "0.85.0",
+    "@react-native/babel-preset": "0.86.0",
+    "@react-native/eslint-config": "0.86.0",
+    "@react-native/jest-preset": "0.86.0",
     "@release-it/conventional-changelog": "^11.0.1",
     "@types/react": "^19.2.0",
     "commitlint": "^21.0.2",
@@ -94,7 +103,7 @@
     "lefthook": "^2.1.9",
     "prettier": "^3.8.3",
     "react": "19.2.3",
-    "react-native": "0.85.0",
+    "react-native": "0.86.0",
     "react-native-builder-bob": "^0.43.0",
     "react-native-web": "~0.21.2",
     "release-it": "^20.2.0",
@@ -102,8 +111,8 @@
     "typescript": "^6.0.3"
   },
   "peerDependencies": {
-    "react": "*",
-    "react-native": "*"
+    "react": ">=19.1.0",
+    "react-native": ">=0.81.4"
   },
   "workspaces": [
     "example"
@@ -138,8 +147,7 @@
     },
     "android": {
       "javaPackageName": "com.ammarahmed.reactnativeworkers"
-    },
-    "includesGeneratedCode": true
+    }
   },
   "prettier": {
     "quoteProps": "consistent",

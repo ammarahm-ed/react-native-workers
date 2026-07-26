@@ -31,5 +31,5 @@
   // The Docusaurus site is its own TypeScript project: it resolves `@site/*`
   // through aliases only Docusaurus knows about, and type-checks itself during
   // its build. Checking it from here reports its imports as unresolvable.
-  "exclude": ["docs"]
+  "exclude": ["docs", "expo-example"]
 }

@@ -1,0 +1,8 @@
+{
+  "platforms": ["apple"],
+  "apple": {
+    "modules": ["RNWorkersExpoModule"],
+    "podspecPath": "ReactNativeWorkers.podspec",
+    "swiftModuleName": "ReactNativeWorkers"
+  }
+}

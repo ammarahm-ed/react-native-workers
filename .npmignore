@@ -1,0 +1,52 @@
+# NOTE: package.json "files" is the primary whitelist for what gets published.
+# This file is a safety net in case "files" is ever removed or bypassed.
+
+# Documentation site (Docusaurus) and prose docs
+docs/
+design-docs/
+tutorials/
+IMPLEMENTATION.md
+CONTRIBUTING.md
+CODE_OF_CONDUCT.md
+
+# Example apps and dev-only modules
+example/
+example-modules/
+
+# Build outputs and caches
+ios/build/
+android/build/
+# Codegen output — NOT shipped: codegenConfig has includesGeneratedCode:false, so
+# each consuming app regenerates the spec. Shipping it double-compiles the
+# TurboModule spec (our pod + the app's ReactCodegen) → duplicate-symbol link error.
+ios/generated/
+android/generated/
+android/.cxx/
+android/local.properties
+android/gradle/
+android/gradlew
+android/gradlew.bat
+*.tgz
+
+# Web/dev tooling
+.github/
+.yarn/
+.yarnrc.yml
+yarn.lock
+babel.config.js
+eslint.config.mjs
+tsconfig.json
+tsconfig.build.json
+turbo.json
+lefthook.yml
+.editorconfig
+.nvmrc
+.watchmanconfig
+
+# Tests and fixtures
+**/__tests__/
+**/__fixtures__/
+**/__mocks__/
+
+# OS junk
+.DS_Store

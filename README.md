@@ -10,7 +10,7 @@ shared memory, and full native-module access.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Platforms](https://img.shields.io/badge/platforms-iOS%20%7C%20Android-lightgrey.svg)](#)
-[![React Native](https://img.shields.io/badge/React%20Native-0.76%2B-61dafb.svg)](https://reactnative.dev)
+[![React Native](https://img.shields.io/badge/React%20Native-0.81.4%2B-61dafb.svg)](https://reactnative.dev)
 [![New Architecture](https://img.shields.io/badge/New%20Architecture-Hermes-brightgreen.svg)](https://reactnative.dev/architecture/landing-page)
 
 [Documentation](https://ammarahm-ed.github.io/react-native-workers/) ·
@@ -59,8 +59,8 @@ timers and Promises, and the same native modules you already use.
 npm install @ammarahmed/react-native-workers
 ```
 
-Requires the **New Architecture** with **Hermes** (RN 0.76+, developed against
-0.85). Native code is autolinked; run `pod install` on iOS.
+Requires the **New Architecture** with **Hermes** (RN 0.81.4+, developed against
+0.86). Native code is autolinked; run `pod install` on iOS.
 
 Then wrap your Metro config — this is what keeps worker bundles small:
 
@@ -166,7 +166,7 @@ store.subscribeIn('doc', ['user'], (path, value) => { /* ['age'], 31 */ });
 For hot paths there are two leaner primitives:
 
 ```ts
-// A single synchronous cell — lock-free for numbers (~8M writes/sec).
+// A single synchronous cell — lock-free for numbers (~17M writes/sec).
 const progress = new SharedValue('anim:progress', 0);
 progress.value = 0.42;
 
@@ -175,8 +175,8 @@ const buf = new SharedBuffer('sim', 50_000 * Float64Array.BYTES_PER_ELEMENT);
 const view = new Float64Array(buf.arrayBuffer);
 ```
 
-`SharedValue` is ~3× faster than `SharedStore` for a single value; `SharedBuffer`
-is ~6–10× faster for bulk numeric work. The full ladder, with benchmarks, is in
+`SharedValue` is ~2× faster than `SharedStore` for a single value; `SharedBuffer`
+is ~4× faster for bulk numeric work. The full ladder, with benchmarks, is in
 [`design-docs/shared-data-primitives.md`](design-docs/shared-data-primitives.md).
 
 </details>
