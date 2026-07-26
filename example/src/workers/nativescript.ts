@@ -46,6 +46,15 @@ function hostView(tag: number): any {
   return view;
 }
 
+/** The controller a modal should be presented from. */
+function topViewController(): any {
+  let current = keyWindow()?.rootViewController ?? null;
+  while (current?.presentedViewController) {
+    current = current.presentedViewController;
+  }
+  return current;
+}
+
 /** Our UIKit subtree, keyed by the React tag it was attached to. */
 const attached = new Map<number, any>();
 const timers = new Map<number, any>();
@@ -224,6 +233,67 @@ parent.register('nativescript', {
       entry.label.alpha = 1;
     }
     return true;
+  },
+
+  /**
+   * A real UIAlertController, presented from the worker and awaited there.
+   *
+   * The interesting part is the button handler. `actionWithTitle:style:handler:`
+   * takes an Obj-C block, and the interop wraps this JS closure into one — so
+   * UIKit calls straight back into this runtime when a button is tapped. The
+   * call arrives on the main thread, which is where this runtime already lives,
+   * so the handler runs inline with no hop and can settle a promise directly.
+   *
+   * That promise is the method's return value, and the worker RPC layer awaits
+   * it, so `await module.alert(...)` on the React side stays pending for as long
+   * as the alert is on screen and resolves with the button the user tapped.
+   * Presenting and reading the result is one call, with no callback plumbing
+   * across the runtime boundary.
+   */
+  alert(title: string, message: string, buttons: string[] = ['OK']) {
+    const presenter = topViewController();
+    if (!presenter) throw new Error('no view controller to present from');
+    if (presenter.presentedViewController) {
+      throw new Error('something is already presented');
+    }
+
+    return new Promise((resolve) => {
+      const started = Date.now();
+      const controller =
+        UIAlertController.alertControllerWithTitleMessagePreferredStyle(
+          title,
+          message,
+          UIAlertControllerStyle.Alert
+        );
+
+      // Keep the controller — and with it the blocks holding these closures —
+      // alive for as long as it is on screen.
+      retainer.retain(controller);
+
+      const settle = (index: number) => {
+        retainer.release(controller);
+        resolve({
+          index,
+          button: buttons[index],
+          onMain: NativeScript.isMainThread(),
+          ms: Date.now() - started,
+        });
+      };
+
+      buttons.forEach((label, i) => {
+        const style =
+          buttons.length > 1 && i === buttons.length - 1
+            ? UIAlertActionStyle.Cancel
+            : UIAlertActionStyle.Default;
+        controller.addAction(
+          UIAlertAction.actionWithTitleStyleHandler(label, style, () =>
+            settle(i)
+          )
+        );
+      });
+
+      presenter.presentViewControllerAnimatedCompletion(controller, true, null);
+    });
   },
 
   /**

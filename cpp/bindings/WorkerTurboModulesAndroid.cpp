@@ -27,6 +27,7 @@
 #include "react/turbomodule/ReactCommon/NativeMethodCallInvokerHolder.h"
 
 #include "WorkerBlobCollector.h"
+#include "WorkerTurboModuleCompat.h"
 
 #include "../runtime/MainThreadScheduler.h"
 #include "../runtime/WorkerAssetReader.h"
@@ -43,6 +44,11 @@
 
 namespace facebook::react::workers {
 
+// Registers the Android Expo installer (defined in WorkerExpoModulesAndroid.cpp).
+// Referencing it from the force-linked ThreadScopeRegistrar below pulls that
+// otherwise-unreferenced object file into the final binary (static archives drop
+// object files nothing references).
+void ensureExpoAndroidInstallerRegistered();
 
 using namespace facebook::jsi;
 
@@ -69,10 +75,9 @@ class WorkerNativeMethodCallInvoker : public NativeMethodCallInvoker {
 // Cxx-only fallback, used when the app has not registered its packages. Mirrors
 // the generic non-Apple path in WorkerTurboModules.cpp.
 void installCxxOnly(Runtime& rt, std::shared_ptr<CallInvoker> workerInvoker) {
-  TurboModuleBinding::install(
+  installWorkerTurboModuleBinding(
       rt,
-      [workerInvoker](Runtime&, const std::string& name)
-          -> std::shared_ptr<TurboModule> {
+      [workerInvoker](const std::string& name) -> std::shared_ptr<TurboModule> {
         if (isWorkerModuleDenied(name)) {
           return nullptr;
         }
@@ -99,6 +104,8 @@ struct ThreadScopeRegistrar {
     installAndroidMainThreadSchedulerFactory();
     // Same linker-retention reason for the release worker-bundle asset reader.
     installAndroidWorkerAssetReaderFactory();
+    // Same linker-retention reason for the Expo-in-worker installer.
+    ensureExpoAndroidInstallerRegistered();
   }
 };
 ThreadScopeRegistrar g_threadScopeRegistrar;

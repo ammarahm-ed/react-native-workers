@@ -10,6 +10,7 @@
 #import <ReactCommon/TurboModuleBinding.h>
 
 #import "WorkerTurboModules.h"
+#import "../cpp/bindings/WorkerTurboModuleCompat.h"
 
 #include <functional>
 #include <memory>
@@ -112,10 +113,9 @@ namespace {
 // runtime).
 void installCxxOnly(jsi::Runtime &rt, std::shared_ptr<CallInvoker> workerInvoker)
 {
-  TurboModuleBinding::install(
+  installWorkerTurboModuleBinding(
       rt,
-      [workerInvoker](jsi::Runtime &, const std::string &name)
-          -> std::shared_ptr<TurboModule> {
+      [workerInvoker](const std::string &name) -> std::shared_ptr<TurboModule> {
         if (isWorkerModuleDenied(name)) {
           return nullptr;
         }

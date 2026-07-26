@@ -1,5 +1,6 @@
 #include "Worker.h"
 
+#include "../bindings/WorkerExpoModules.h"
 #include "../bindings/WorkerGlobalScope.h"
 #include "../bindings/WorkerPrelude.h"
 #include "../bindings/WorkerTurboModules.h"
@@ -130,6 +131,23 @@ void Worker::start(std::string code, std::string sourceUrl) {
         // cleanup runs on the worker thread before the runtime is destroyed.
         auto tmCleanup =
             installWorkerTurboModules(rt, workerInvoker, nativeModules);
+        // When a worker opts into native modules AND the app is an Expo app,
+        // install the Expo Modules API (`global.expo` + `requireNativeModule`) into
+        // this worker runtime. No-op on non-Expo apps. Platform strategies differ:
+        //  * iOS (ios/WorkerExpoModules.mm): install OUR OWN host object built in
+        //    the WORKER runtime that forwards each call natively via the app's
+        //    shared AppContext — the Swift↔C++ boundary blocks a per-worker
+        //    AppContext there, so nothing may cross runtimes.
+        //  * Android (cpp/bindings/WorkerExpoModulesAndroid.cpp): build a real
+        //    per-worker Expo AppContext and let Expo's own `installJSIForBridgeless`
+        //    install `global.expo` against the WORKER runtime — Android's JNI install
+        //    takes a raw runtime pointer + CallInvoker, so full native reuse works.
+        // The installer returns a teardown thunk (Android: release the per-worker
+        // AppContext; iOS: none) run on the worker thread in setPreDestroy below.
+        std::function<void()> expoCleanup;
+        if (nativeModules) {
+          expoCleanup = installExpoModulesInWorker(rt, workerInvoker);
+        }
         // SharedStore: schedule this worker's watcher callbacks on its own loop.
         // Post through the worker's CallInvoker, NOT the raw host: a SharedStore
         // subscription lives in the process-global store and can outlive this
@@ -154,9 +172,14 @@ void Worker::start(std::string code, std::string sourceUrl) {
         // platform TurboModule manager.
         host->setPreDestroy([storeCleanup = std::move(storeCleanup),
                              valueCleanup = std::move(valueCleanup),
-                             tmCleanup = std::move(tmCleanup)](Runtime& rt) {
+                             tmCleanup = std::move(tmCleanup),
+                             expoCleanup = std::move(expoCleanup)](Runtime& rt) {
           if (storeCleanup) storeCleanup(rt);
           if (valueCleanup) valueCleanup(rt);
+          // Release the per-worker Expo AppContext (Android) before the TurboModule
+          // manager and the runtime go away — it runs Kotlin onDestroy + unbinds the
+          // worker runtime's JSIContext, which must happen on this worker thread.
+          if (expoCleanup) expoCleanup();
           if (tmCleanup) tmCleanup(rt);
         });
       });

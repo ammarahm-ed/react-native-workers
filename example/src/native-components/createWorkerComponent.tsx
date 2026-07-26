@@ -1,10 +1,10 @@
-/* eslint-disable @react-native/no-deep-imports -- NativeComponentRegistry is
-   how every codegen'd component registers a static view config; the public
-   `requireNativeComponent` takes the legacy path and asks native for the config,
-   which a runtime-registered view manager cannot answer. */
+// `NativeComponentRegistry` is how every codegen'd component registers a static
+// view config; the public `requireNativeComponent` takes the legacy path and
+// asks native for the config, which a runtime-registered view manager cannot
+// answer. RN re-exports the registry from its public entry point (it's in the
+// strict-API type surface), so no deep import is needed.
 import type { ComponentType } from 'react';
-import type { HostComponent } from 'react-native';
-import * as NativeComponentRegistry from 'react-native/Libraries/NativeComponent/NativeComponentRegistry';
+import { NativeComponentRegistry, type HostComponent } from 'react-native';
 
 /** A component descriptor the worker reports (see the worker's `list()`). */
 export type Descriptor = { name: string; props: string[]; events: string[] };

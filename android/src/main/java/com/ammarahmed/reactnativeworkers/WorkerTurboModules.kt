@@ -170,6 +170,14 @@ object WorkerTurboModules {
   fun isReady(): Boolean = workerPackages != null
 
   /**
+   * The host [ReactApplicationContext] captured by [initialize]. Used by the Expo
+   * worker bridge (WorkerExpoModules) to build a worker-bound Expo AppContext.
+   * Null until the app has registered.
+   */
+  @JvmStatic
+  internal fun hostReactContext(): ReactApplicationContext? = hostContext
+
+  /**
    * Called from C++ on the worker thread. Builds a per-worker TurboModuleManager
    * whose construction installs the module proxy onto the worker runtime, and
    * returns it so C++ owns its lifetime (holds it, then invalidates it before the
@@ -192,7 +200,7 @@ object WorkerTurboModules {
     val packages = workerPackages ?: return null
     val host = hostContext ?: return null
     val workerContext =
-      WorkerReactContext(host, jsRuntimePointer, jsCallInvokerHolder)
+      WorkerReactContextImpl(host, jsRuntimePointer, jsCallInvokerHolder)
     val delegate =
       DefaultTurboModuleManagerDelegate.Builder()
         .setPackages(packages)

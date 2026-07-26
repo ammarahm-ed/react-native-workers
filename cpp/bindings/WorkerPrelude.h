@@ -337,7 +337,17 @@ constexpr const char* kWorkerPrelude = R"JS(
     if (arr) { var c = arr.slice(); for (var i = 0; i < c.length; i++) c[i].call(this, ev); }
   };
   ChildWorker.prototype.__deliver = function (type, payload) {
-    if (type === 'message') this.__fire('message', { type: 'message', data: payload });
+    if (type === 'message') {
+      // Bridge traffic ('__rnwb' === 1) is multiplexed over the same message
+      // channel; a child announces itself with a `hello` envelope at startup.
+      // It must NOT surface on the user's child.onmessage — otherwise the first
+      // thing a parent sees from a fresh child is the bridge hello, not the
+      // child's real reply. Mirror the host wrappers (src/Worker*.ts), which
+      // intercept it the same way. Nested worker↔child bridge RPC is not a
+      // feature yet, so there is nothing to route it to — dropping is correct.
+      if (payload && payload['__rnwb'] === 1) return;
+      this.__fire('message', { type: 'message', data: payload });
+    }
     else if (type === 'error') this.__fire('error', payload && (payload.type = 'error', payload) || { type: 'error' });
     else if (type === 'messageerror') this.__fire('messageerror', { type: 'messageerror' });
   };

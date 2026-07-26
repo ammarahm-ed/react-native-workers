@@ -46,7 +46,20 @@ function inlineEnv({ types: t }) {
 
 module.exports = getConfig(
   {
-    presets: ['module:@react-native/babel-preset'],
+    // `disableDeepImportWarnings` turns off @react-native/babel-preset's
+    // `warn-on-deep-imports` plugin, which injects a `console.warn(...)` into
+    // every module that imports `react-native/Libraries/...`. This example
+    // deliberately loads native-module libraries inside workers (gzip, blob-util,
+    // mmkv) and uses a few deep imports of its own that have no public-API
+    // equivalent (Blob, NativeComponentRegistry) — so the nag is pure noise here,
+    // multiplied by every worker that forwards its console to the host. The
+    // plugin is dev-only, so release bundles are unaffected either way.
+    presets: [
+      [
+        'module:@react-native/babel-preset',
+        { disableDeepImportWarnings: true },
+      ],
+    ],
     plugins: [
       // Added by `nativescript-rn configure`. Rewrites callbacks carrying a
       // 'use ui' / 'use js' directive to NativeScript's thread invokers. The

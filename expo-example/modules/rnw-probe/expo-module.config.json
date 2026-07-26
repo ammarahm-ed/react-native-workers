@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["RNWProbeModule"]
+  },
+  "android": {
+    "modules": ["expo.modules.rnwprobe.RNWProbeModule"]
+  }
+}

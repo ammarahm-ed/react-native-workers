@@ -7,6 +7,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { Worker } from '@ammarahmed/react-native-workers';
+import { markReady } from '../devReady';
 
 const LINES = 120000;
 const SWEEP = [1, 2, 4, 8];
@@ -50,6 +51,7 @@ export default function ParseScreen() {
       }
       setBusy(false);
       setProgress('');
+      markReady('parse', 'data');
     })();
 
     return () => {

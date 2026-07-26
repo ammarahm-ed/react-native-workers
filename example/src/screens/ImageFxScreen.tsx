@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { Worker, SharedBuffer } from '@ammarahmed/react-native-workers';
+import { markReady } from '../devReady';
 
 const W = 192;
 const H = 192;
@@ -77,6 +78,7 @@ export default function ImageFxScreen() {
       setInfo(
         `blur in the worker — filter ${first.filterMs}ms, encode ${first.encodeMs}ms`
       );
+      markReady('imagefx', 'data');
     })();
 
     return () => {

@@ -40,9 +40,18 @@ import com.facebook.react.turbomodule.core.interfaces.CallInvokerHolder
  * so the `runOnJSQueueThread` / `assertOnNativeModulesQueueThread` family behaves
  * exactly as it does on the main thread rather than throwing on uninitialized
  * state.
+ *
+ * RN cross-version note: RN 0.87 added a new abstract
+ * `ReactContext.getRuntimeExecutor(): RuntimeExecutor?` that does NOT exist on
+ * 0.81–0.86, so `override fun getRuntimeExecutor()` can't live here (it would fail
+ * to compile across the whole supported range). This class is therefore `abstract`;
+ * the concrete [WorkerReactContextImpl] lives in one of two RN-version-selected
+ * source sets (`src/rn87/java` vs `src/rnLegacy/java`, chosen in build.gradle) —
+ * the 0.87+ variant overrides `getRuntimeExecutor()`, the legacy one doesn't.
+ * Construct via `WorkerReactContextImpl(...)`, never this class directly.
  */
-internal class WorkerReactContext(
-  private val host: ReactApplicationContext,
+internal abstract class WorkerReactContext(
+  protected val host: ReactApplicationContext,
   jsRuntimePointer: Long,
   private val workerCallInvokerHolder: CallInvokerHolder,
 ) : ReactApplicationContext(host) {

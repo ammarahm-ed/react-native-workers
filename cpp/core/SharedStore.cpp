@@ -3,6 +3,7 @@
 #include "MessageCodec.h"
 
 #include <atomic>
+#include <cmath>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -65,6 +66,13 @@ struct PathSeg {
 };
 using Path = std::vector<PathSeg>;
 
+// Array nodes are DENSE vectors, so an index in a path must be a small
+// non-negative integer: setIn pads up to the index, and an unchecked cast of
+// e.g. -1 to size_t would make that resize attempt ~2^64 entries and abort the
+// process. Larger integers than this cap are almost certainly a mistake for a
+// dense store, so they are rejected rather than silently allocating gigabytes.
+constexpr double kMaxPathIndex = 1 << 20;
+
 Path readPath(Runtime& rt, const Value& v) {
   Path path;
   if (!v.isObject() || !v.getObject(rt).isArray(rt)) return path;
@@ -75,8 +83,18 @@ Path readPath(Runtime& rt, const Value& v) {
     Value seg = a.getValueAtIndex(rt, i);
     PathSeg ps{};
     if (seg.isNumber()) {
-      ps.isIndex = true;
-      ps.index = static_cast<size_t>(seg.asNumber());
+      double d = seg.asNumber();
+      if (d >= 0 && d < kMaxPathIndex && d == std::floor(d)) {
+        ps.isIndex = true;
+        ps.index = static_cast<size_t>(d);
+      } else if (std::isfinite(d) && d >= kMaxPathIndex && d == std::floor(d)) {
+        throw JSError(rt, "SharedStore: array index in path is too large");
+      } else {
+        // Negative / fractional / NaN: JS treats these as string properties
+        // (arr[-1] === arr["-1"]), so stringify the way JS would.
+        ps.isIndex = false;
+        ps.key = seg.toString(rt).utf8(rt);
+      }
     } else {
       ps.isIndex = false;
       ps.key = seg.asString(rt).utf8(rt);
@@ -381,10 +399,14 @@ struct RuntimeSubscriptions {
     entries.emplace_back(std::move(store), std::move(sub));
   }
 
-  void remove(uint64_t subId) {
+  // Match by pointer identity, NOT by id: ids are allocated per-StoreData
+  // (nextSubId), so two subscriptions on different stores can share an id and an
+  // id-based erase could drop the wrong store's entry — leaving a subscriber
+  // whose jsi::Function would outlive its runtime.
+  void remove(const Subscriber* sub) {
     std::lock_guard<std::mutex> lock(mutex);
     for (size_t i = 0; i < entries.size(); ++i) {
-      if (entries[i].second->id == subId) {
+      if (entries[i].second.get() == sub) {
         entries.erase(entries.begin() + i);
         return;
       }
@@ -830,7 +852,7 @@ class StoreHandle : public std::enable_shared_from_this<StoreHandle> {
               }
             }
           }
-          runtimeSubs->remove(sub->id);
+          runtimeSubs->remove(sub.get());
           return Value::undefined();
         });
   }

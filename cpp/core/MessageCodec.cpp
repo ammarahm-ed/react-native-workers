@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <optional>
 #include <utility>
 
 namespace facebook::react::workers {
@@ -43,16 +44,39 @@ class VecMutableBuffer : public MutableBuffer {
 struct Encoder {
   Runtime& rt;
   Message msg;
-  std::vector<Value> seen; // arrays/objects already written (cycles/dedup)
-  Function dateCtor;
-  Function isViewFn;
+  // Cycle/dedup detection via a JS Map (object -> id): identity-hashed O(1)
+  // lookup per object instead of a linear jsi strictEquals scan (O(N^2) over the
+  // whole graph). All helpers are created lazily on the first object encountered
+  // so primitive-only messages — the postMessage hot path — pay for none of it.
+  std::optional<Object> seenMap;
+  std::optional<Function> seenGet;
+  std::optional<Function> seenSet;
+  uint32_t seenCount = 0;
+  std::optional<Function> dateCtor;
+  std::optional<Function> isViewFn;
 
-  explicit Encoder(Runtime& r)
-      : rt(r),
-        dateCtor(r.global().getPropertyAsFunction(r, "Date")),
-        isViewFn(r.global()
-                     .getPropertyAsObject(r, "ArrayBuffer")
-                     .getPropertyAsFunction(r, "isView")) {}
+  explicit Encoder(Runtime& r) : rt(r) { msg.data.reserve(128); }
+
+  void ensureHelpers() {
+    if (seenMap) return;
+    seenMap.emplace(rt.global()
+                        .getPropertyAsFunction(rt, "Map")
+                        .callAsConstructor(rt)
+                        .getObject(rt));
+    seenGet.emplace(seenMap->getPropertyAsFunction(rt, "get"));
+    seenSet.emplace(seenMap->getPropertyAsFunction(rt, "set"));
+    dateCtor.emplace(rt.global().getPropertyAsFunction(rt, "Date"));
+    isViewFn.emplace(rt.global()
+                         .getPropertyAsObject(rt, "ArrayBuffer")
+                         .getPropertyAsFunction(rt, "isView"));
+  }
+
+  // Register a container in the identity map. Ids are assigned in encounter
+  // order, matching the decoder's `decoded` vector.
+  void remember(const Value& v) {
+    seenSet->callWithThis(
+        rt, *seenMap, v, Value(static_cast<double>(seenCount++)));
+  }
 
   void byte(uint8_t b) { msg.data.push_back(b); }
   void varuint(uint32_t v) {
@@ -80,10 +104,13 @@ void encodeObject(Encoder& e, const Value& v, const Object& obj) {
   if (obj.isFunction(rt)) {
     throw DataCloneError("Could not clone value: a function cannot be cloned.");
   }
-  for (size_t i = 0; i < e.seen.size(); ++i) {
-    if (Object::strictEquals(rt, e.seen[i].asObject(rt), obj)) {
+  e.ensureHelpers();
+  {
+    // Only arrays/objects are ever registered, so a hit is always a container.
+    Value found = e.seenGet->callWithThis(rt, *e.seenMap, v);
+    if (found.isNumber()) {
       e.byte(TAG_REF);
-      e.varuint(static_cast<uint32_t>(i));
+      e.varuint(static_cast<uint32_t>(found.getNumber()));
       return;
     }
   }
@@ -94,27 +121,10 @@ void encodeObject(Encoder& e, const Value& v, const Object& obj) {
     e.varuint(e.addBlob(ab.data(rt), ab.size(rt)));
     return;
   }
-  {
-    Value vcopy(rt, v);
-    if (e.isViewFn.call(rt, std::move(vcopy)).getBool()) {
-      std::string ctorName = obj.getPropertyAsObject(rt, "constructor")
-                                 .getProperty(rt, "name")
-                                 .asString(rt)
-                                 .utf8(rt);
-      size_t byteOffset =
-          static_cast<size_t>(obj.getProperty(rt, "byteOffset").asNumber());
-      size_t byteLength =
-          static_cast<size_t>(obj.getProperty(rt, "byteLength").asNumber());
-      ArrayBuffer ab = obj.getPropertyAsObject(rt, "buffer").getArrayBuffer(rt);
-      e.byte(TAG_TYPEDARRAY);
-      e.str(ctorName);
-      e.varuint(e.addBlob(ab.data(rt) + byteOffset, byteLength));
-      return;
-    }
-  }
 
+  // Arrays before the isView JS call: arrays are common and never views.
   if (obj.isArray(rt)) {
-    e.seen.push_back(Value(rt, v)); // id = index; registered before children
+    e.remember(v); // id = encounter order; registered before children
     Array arr = obj.getArray(rt);
     size_t n = arr.size(rt);
     e.byte(TAG_ARRAY);
@@ -125,7 +135,23 @@ void encodeObject(Encoder& e, const Value& v, const Object& obj) {
     return;
   }
 
-  if (obj.instanceOf(rt, e.dateCtor)) {
+  if (e.isViewFn->call(rt, Value(rt, v)).getBool()) {
+    std::string ctorName = obj.getPropertyAsObject(rt, "constructor")
+                               .getProperty(rt, "name")
+                               .asString(rt)
+                               .utf8(rt);
+    size_t byteOffset =
+        static_cast<size_t>(obj.getProperty(rt, "byteOffset").asNumber());
+    size_t byteLength =
+        static_cast<size_t>(obj.getProperty(rt, "byteLength").asNumber());
+    ArrayBuffer ab = obj.getPropertyAsObject(rt, "buffer").getArrayBuffer(rt);
+    e.byte(TAG_TYPEDARRAY);
+    e.str(ctorName);
+    e.varuint(e.addBlob(ab.data(rt) + byteOffset, byteLength));
+    return;
+  }
+
+  if (obj.instanceOf(rt, *e.dateCtor)) {
     double t = obj.getPropertyAsFunction(rt, "getTime")
                    .callWithThis(rt, obj)
                    .asNumber();
@@ -136,16 +162,17 @@ void encodeObject(Encoder& e, const Value& v, const Object& obj) {
     return;
   }
 
-  e.seen.push_back(Value(rt, v));
+  e.remember(v);
   Array names = obj.getPropertyNames(rt);
   size_t n = names.size(rt);
   e.byte(TAG_OBJECT);
   e.varuint(static_cast<uint32_t>(n));
   for (size_t i = 0; i < n; ++i) {
-    std::string key = names.getValueAtIndex(rt, i).asString(rt).utf8(rt);
-    Value propVal = obj.getProperty(rt, key.c_str());
-    e.str(key);
-    encodeValue(e, propVal);
+    // Keep the jsi::String: the property lookup uses it directly instead of
+    // round-tripping through utf8 -> char* -> a new interned name.
+    String nameStr = names.getValueAtIndex(rt, i).asString(rt);
+    e.str(nameStr.utf8(rt));
+    encodeValue(e, obj.getProperty(rt, nameStr));
   }
 }
 
@@ -205,26 +232,26 @@ struct Decoder {
   }
   uint32_t varuint() {
     uint32_t result = 0;
-    int shift = 0;
-    while (true) {
+    // Bounded: a uint32 needs at most 5 varint bytes; more is a malformed
+    // message (and an unbounded shift would be UB).
+    for (int shift = 0; shift <= 28; shift += 7) {
       uint8_t b = byte();
       result |= static_cast<uint32_t>(b & 0x7f) << shift;
-      if (!(b & 0x80)) break;
-      shift += 7;
+      if (!(b & 0x80)) return result;
     }
-    return result;
+    throw DataCloneError("message truncated");
   }
-  void raw(void* dst, size_t n) {
-    if (off + n > msg.data.size()) throw DataCloneError("message truncated");
-    std::memcpy(dst, msg.data.data() + off, n);
+  // Bounds-checked view into the wire bytes (overflow-safe: off <= size).
+  const uint8_t* bytes(size_t n) {
+    if (n > msg.data.size() - off) throw DataCloneError("message truncated");
+    const uint8_t* p = msg.data.data() + off;
     off += n;
+    return p;
   }
+  void raw(void* dst, size_t n) { std::memcpy(dst, bytes(n), n); }
   std::string str() {
     uint32_t n = varuint();
-    if (off + n > msg.data.size()) throw DataCloneError("message truncated");
-    std::string s(reinterpret_cast<const char*>(msg.data.data() + off), n);
-    off += n;
-    return s;
+    return std::string(reinterpret_cast<const char*>(bytes(n)), n);
   }
   std::shared_ptr<std::vector<uint8_t>> blob(uint32_t idx) {
     if (idx >= msg.blobs.size()) throw DataCloneError("bad blob index");
@@ -254,8 +281,11 @@ Value decodeValue(Decoder& d) {
       d.raw(&x, 8);
       return Value(x);
     }
-    case TAG_STRING:
-      return Value(String::createFromUtf8(rt, d.str()));
+    case TAG_STRING: {
+      // Build the jsi string straight from the wire bytes — no std::string.
+      uint32_t n = d.varuint();
+      return Value(String::createFromUtf8(rt, d.bytes(n), n));
+    }
     case TAG_DATE: {
       double t;
       d.raw(&t, 8);
@@ -296,8 +326,12 @@ Value decodeValue(Decoder& d) {
       d.decoded.emplace_back(Value(rt, v));
       Object obj = v.getObject(rt);
       for (uint32_t i = 0; i < n; ++i) {
-        std::string key = d.str();
-        obj.setProperty(rt, key.c_str(), decodeValue(d));
+        // Sequenced explicitly: the key bytes must be consumed before the value
+        // decode advances the cursor (argument evaluation order is unspecified).
+        uint32_t kn = d.varuint();
+        String key = String::createFromUtf8(rt, d.bytes(kn), kn);
+        Value val = decodeValue(d);
+        obj.setProperty(rt, key, std::move(val));
       }
       return v;
     }
@@ -336,19 +370,20 @@ struct JsonReader {
   uint8_t byte() { return off < msg.data.size() ? msg.data[off++] : TAG_NULL; }
   uint32_t varuint() {
     uint32_t r = 0;
-    int s = 0;
-    while (true) {
+    // Bounded like Decoder::varuint; this reader is tolerant, so just stop.
+    for (int s = 0; s <= 28; s += 7) {
       uint8_t b = byte();
       r |= static_cast<uint32_t>(b & 0x7f) << s;
       if (!(b & 0x80)) break;
-      s += 7;
     }
     return r;
   }
   std::string str() {
     uint32_t n = varuint();
-    std::string out;
-    for (uint32_t i = 0; i < n && off < msg.data.size(); ++i) out.push_back(static_cast<char>(msg.data[off++]));
+    size_t avail = msg.data.size() - off;
+    size_t take = n < avail ? n : avail;
+    std::string out(reinterpret_cast<const char*>(msg.data.data() + off), take);
+    off += take;
     return out;
   }
   template <typename T>

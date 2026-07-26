@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { Worker } from '@ammarahmed/react-native-workers';
+import { markReady } from '../devReady';
 
 type Hit = { id: number; title: string; snippet: string };
 
@@ -74,7 +75,8 @@ export default function SearchServiceScreen() {
         setStats(built);
         setBuilding(false);
         logEvent(`indexed ${built.docs} docs / ${built.terms} terms`);
-        runSearch('worker');
+        await runSearch('worker');
+        markReady('search', 'data');
       } catch (err: any) {
         logEvent(`error: ${err?.message ?? err}`);
         setBuilding(false);

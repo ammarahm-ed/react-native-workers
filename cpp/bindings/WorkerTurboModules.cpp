@@ -41,6 +41,8 @@ bool isWorkerModuleDenied(const std::string& name) {
 #include <ReactCommon/TurboModule.h>
 #include <ReactCommon/TurboModuleBinding.h>
 
+#include "WorkerTurboModuleCompat.h"
+
 namespace facebook::react::workers {
 
 using namespace facebook::jsi;
@@ -52,10 +54,9 @@ std::function<void(Runtime&)> installWorkerTurboModules(
   // No platform-module support here; always Cxx-only, nothing to tear down.
   rt.global().setProperty(rt, "RN$Bridgeless", Value(true));
 
-  TurboModuleBinding::install(
+  installWorkerTurboModuleBinding(
       rt,
-      [workerInvoker](Runtime& /*rt*/, const std::string& name)
-          -> std::shared_ptr<TurboModule> {
+      [workerInvoker](const std::string& name) -> std::shared_ptr<TurboModule> {
         if (isWorkerModuleDenied(name)) {
           return nullptr;
         }

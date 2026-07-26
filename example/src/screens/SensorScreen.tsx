@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Text, View, StyleSheet, Pressable } from 'react-native';
 import { Worker, SharedBuffer } from '@ammarahmed/react-native-workers';
+import { markReady } from '../devReady';
 
 const CAPACITY = 512; // samples kept in the ring
 const HEADER = 2; // [cursor, producerHz]
@@ -46,6 +47,7 @@ export default function SensorScreen() {
       await (w.module('sensor') as any).start(hz);
       if (!alive) return;
       setRunning(true);
+      markReady('sensor', 'data');
 
       loop = setInterval(() => {
         const v = viewRef.current;

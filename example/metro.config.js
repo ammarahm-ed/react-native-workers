@@ -49,4 +49,26 @@ function withNativeScriptWorkerShim(cfg) {
   };
 }
 
-module.exports = withNativeScriptWorkerShim(withWorkers(config));
+/**
+ * `RN_WORKERS_SCREEN` is inlined into the bundle by babel (see babel.config.js)
+ * at transform time, but Metro's transform cache key does NOT include it — so
+ * changing the env var and restarting Metro would keep serving a stale transform
+ * of App.tsx (the value baked into it stays until `--reset-cache`). Folding the
+ * value into `transformer.cacheVersion` makes it part of every transform's cache
+ * key, so switching the initial screen (or unsetting it) invalidates the cache
+ * automatically — no more "iOS always boots the last screen I pinned".
+ */
+function withInitialScreenCacheKey(cfg) {
+  const prev = cfg.transformer?.cacheVersion || '';
+  return {
+    ...cfg,
+    transformer: {
+      ...cfg.transformer,
+      cacheVersion: `${prev}|rnworkers-screen=${process.env.RN_WORKERS_SCREEN || ''}`,
+    },
+  };
+}
+
+module.exports = withInitialScreenCacheKey(
+  withNativeScriptWorkerShim(withWorkers(config))
+);

@@ -8,6 +8,7 @@ import {
   Switch,
 } from 'react-native';
 import { Worker, SharedStore } from '@ammarahmed/react-native-workers';
+import { markReady } from '../devReady';
 
 const SAMPLE =
   'React Native workers run real Hermes runtimes on their own threads. ' +
@@ -66,6 +67,7 @@ export default function NotesScreen() {
 
       setReady(true);
       typeOut(SAMPLE);
+      markReady('notes', 'data');
     })();
 
     return () => {

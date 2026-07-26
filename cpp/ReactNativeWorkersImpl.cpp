@@ -12,10 +12,17 @@
 #include "runtime/WorkerAssetReader.h"
 
 #include <algorithm>
+#include <cstdarg>
+#include <cstdio>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <thread>
 #include <utility>
+
+#if defined(__ANDROID__)
+#include <android/log.h>
+#endif
 
 namespace facebook::react {
 
@@ -26,6 +33,34 @@ using workers::Worker;
 using workers::WorkerError;
 
 namespace {
+// Bundled-worker loading is a build-configuration concern that only shows up in
+// release, where there is no Metro and no JS console to inspect. Log the path
+// each bundled worker takes to the platform log, so a release build can be
+// diagnosed with `adb logcat -s RNWorkerAsset` / the simulator console.
+void assetLog(const char* fmt, ...) {
+  va_list args;
+  va_start(args, fmt);
+#if defined(__ANDROID__)
+  __android_log_vprint(ANDROID_LOG_INFO, "RNWorkerAsset", fmt, args);
+#else
+  fprintf(stderr, "[RNWorkerAsset] ");
+  vfprintf(stderr, fmt, args);
+  fprintf(stderr, "\n");
+#endif
+  va_end(args);
+}
+
+// Hermes bytecode file magic (little-endian 0x1F1903C103BC1FC6) — the same value
+// Hermes sniffs for in evaluateJavaScript to choose the HBC path. Checked only
+// so the log can report which format actually shipped; the evaluate path itself
+// does not branch on it.
+bool looksLikeHermesBytecode(const std::string& bytes) {
+  static const unsigned char kMagic[] = {
+      0xc6, 0x1f, 0xbc, 0x03, 0xc1, 0x03, 0x19, 0x1f};
+  if (bytes.size() < sizeof(kMagic)) return false;
+  return std::memcmp(bytes.data(), kMagic, sizeof(kMagic)) == 0;
+}
+
 // Destroy a worker (which joins its thread) off the host JS thread so
 // terminate()/close cleanup never blocks the app's JS thread.
 void reap(std::shared_ptr<Worker> worker) {
@@ -62,10 +97,6 @@ ReactNativeWorkersImpl::~ReactNativeWorkersImpl() {
   uiRuntimes_.clear();
   runtimeUrl_.clear();
   deviceEventRuntimes_.clear();
-}
-
-double ReactNativeWorkersImpl::multiply(jsi::Runtime&, double a, double b) {
-  return a * b;
 }
 
 bool ReactNativeWorkersImpl::install(jsi::Runtime& rt) {
@@ -224,6 +255,7 @@ double ReactNativeWorkersImpl::createWorkerImpl(
     // evaluate, so there is nothing to branch on here.
     auto reader = workers::getWorkerAssetReader();
     if (!reader) {
+      assetLog("no asset reader registered; cannot load '%s'", value.c_str());
       WorkerError err;
       err.message =
           "Cannot load bundled worker '" + value +
@@ -237,6 +269,7 @@ double ReactNativeWorkersImpl::createWorkerImpl(
     std::string bytes;
     std::string error;
     if (!reader->read(value, bytes, error)) {
+      assetLog("read FAILED '%s': %s", value.c_str(), error.c_str());
       WorkerError err;
       // A missing bundle is a build-configuration mistake, so name the asset and
       // point at the step that produces it rather than failing generically.
@@ -246,6 +279,12 @@ double ReactNativeWorkersImpl::createWorkerImpl(
       deliverError(runtimeId, std::move(err));
       return static_cast<double>(connId);
     }
+    assetLog(
+        "loaded '%s' (%zu bytes, %s) -> worker %u",
+        value.c_str(),
+        bytes.size(),
+        looksLikeHermesBytecode(bytes) ? "hermes bytecode" : "plain JS",
+        runtimeId);
     worker->start(std::move(bytes), sourceUrl);
   } else {
     // "url" is resolved in JS (dev fetches from Metro and re-enters as inline),
@@ -372,6 +411,31 @@ AsyncPromise<std::string> ReactNativeWorkersImpl::nativeWorkerSelfTest(
   return *promise;
 }
 
+void ReactNativeWorkersImpl::postToHost(std::function<void(Runtime&)> task) {
+  // Fast path: a native wakeup of the host JS thread, no JVM boundary. Once
+  // installed this is a queue push plus one write() syscall.
+  if (hostWaker_) {
+    hostWaker_->post(std::move(task));
+    return;
+  }
+
+  // Not installed yet. Installation must happen ON the host JS thread (the
+  // looper and the runtime are both thread-local), so the FIRST delivery goes
+  // through the CallInvoker and installs the waker while it is there. Every
+  // later delivery takes the fast path above.
+  //
+  // hostWakerTried_ is only read/written inside this host-thread callback, so
+  // it needs no synchronisation, and a failed install is never retried.
+  jsInvoker_->invokeAsync(
+      [this, task = std::move(task)](Runtime& rt) mutable {
+        if (!hostWakerTried_) {
+          hostWakerTried_ = true;
+          hostWaker_ = workers::createHostThreadWaker(rt);
+        }
+        task(rt);
+      });
+}
+
 void ReactNativeWorkersImpl::deliverMessage(
     uint32_t runtimeId,
     Message message) {
@@ -379,7 +443,7 @@ void ReactNativeWorkersImpl::deliverMessage(
   // (JS handle) currently attached to that runtime. Connection membership is read
   // here on the host JS thread, where it is exclusively mutated.
   auto shared = std::make_shared<Message>(std::move(message));
-  jsInvoker_->invokeAsync([this, runtimeId, shared](Runtime& rt) {
+  postToHost([this, runtimeId, shared](Runtime& rt) {
     auto it = runtimeConnections_.find(runtimeId);
     if (it == runtimeConnections_.end()) return;
     auto deliver = rt.global().getProperty(rt, "__rnworkersDeliver");
@@ -403,7 +467,7 @@ void ReactNativeWorkersImpl::deliverLog(
     uint32_t runtimeId,
     const std::string& level,
     const std::string& text) {
-  jsInvoker_->invokeAsync([this, runtimeId, level, text](Runtime& rt) {
+  postToHost([this, runtimeId, level, text](Runtime& rt) {
     auto it = runtimeConnections_.find(runtimeId);
     if (it == runtimeConnections_.end()) return;
     for (uint32_t connId : it->second) {
@@ -428,7 +492,7 @@ void ReactNativeWorkersImpl::deliverLog(
 void ReactNativeWorkersImpl::deliverError(
     uint32_t runtimeId,
     WorkerError error) {
-  jsInvoker_->invokeAsync([this, runtimeId, error](Runtime& rt) {
+  postToHost([this, runtimeId, error](Runtime& rt) {
     auto it = runtimeConnections_.find(runtimeId);
     if (it == runtimeConnections_.end()) return;
     for (uint32_t connId : it->second) {
@@ -454,14 +518,14 @@ void ReactNativeWorkersImpl::deliverError(
 
 void ReactNativeWorkersImpl::workerClosed(uint32_t runtimeId) {
   // self.close() from the worker. Reap the whole runtime (all its connections).
-  jsInvoker_->invokeAsync([this, runtimeId](Runtime&) { reapRuntime(runtimeId); });
+  postToHost([this, runtimeId](Runtime&) { reapRuntime(runtimeId); });
 }
 
 void ReactNativeWorkersImpl::enableDeviceEvents(uint32_t runtimeId) {
   // Called from the worker thread; hop to the host JS thread where the set and
   // the wrapped emitter live. Keyed by runtime — delivered once regardless of
   // how many connections are attached.
-  jsInvoker_->invokeAsync(
+  postToHost(
       [this, runtimeId](Runtime&) { deviceEventRuntimes_.insert(runtimeId); });
 }
 

@@ -12,6 +12,7 @@ import {
   UIWorker,
   SharedValue,
 } from '@ammarahmed/react-native-workers';
+import { markReady } from '../devReady';
 
 // Shared cells the worker's animation loop reads/writes. Names are constants so
 // both runtimes open the same cells.
@@ -59,6 +60,7 @@ export default function UIWorkerDemoScreen() {
         log(`UIWorker  → onMain=${u.onMain}  thread=${u.thread}`, 'info');
         log(`Worker    → onMain=${b.onMain}  thread=${b.thread}`, 'info');
         setReady(true);
+        markReady('uiworker', 'data');
       } catch (err: any) {
         log(`startup failed: ${err?.message ?? err}`, 'err');
       }

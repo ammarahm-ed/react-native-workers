@@ -9,6 +9,7 @@ import {
   findNodeHandle,
 } from 'react-native';
 import { UIWorker, SharedValue } from '@ammarahmed/react-native-workers';
+import { markReady } from '../devReady';
 
 // Shared cells the worker's animation loop reads/writes. Names are constants so
 // both runtimes open the same cells.
@@ -75,6 +76,7 @@ export default function NativeScriptScreen() {
           'info'
         );
         setReady(true);
+        markReady('nativescript', 'data');
       } catch (err: any) {
         logRef.current(`startup failed: ${err?.message ?? err}`, 'err');
       }
@@ -214,6 +216,30 @@ export default function NativeScriptScreen() {
         so blocking the JS thread does not stall it. React knows nothing about
         this subtree — a re-render of the host view leaves it alone, but
         unmounting takes it with it.
+      </Text>
+
+      <Text style={styles.section}>Native UI, awaited from the worker</Text>
+      <View style={styles.row}>
+        <Btn
+          label="Native alert"
+          disabled={!ready}
+          onPress={() =>
+            run('alert', (m) =>
+              m.alert(
+                'Hello from a worker',
+                'This UIAlertController was built, presented and awaited entirely inside the UIWorker.',
+                ['Nice', 'Dismiss']
+              )
+            )
+          }
+        />
+      </View>
+      <Text style={styles.note}>
+        The button handler is a JS closure the interop wraps in an Obj-C block,
+        so UIKit calls back into the worker on tap — inline, because that
+        runtime is already on the main thread. The worker returns a promise, the
+        RPC layer awaits it, and the call above stays pending until you tap: one
+        await, no callback plumbing across runtimes.
       </Text>
 
       <Text style={styles.section}>Call cost</Text>

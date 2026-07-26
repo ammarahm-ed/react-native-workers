@@ -62,9 +62,9 @@ class WorkerSwitch extends NativeComponent {
   static events = ['onValueChange'];
 
   create() {
-    // `eventView` gives us a UISwitch subclass that captures RN's native event
+    // `hostView` gives us a UISwitch subclass that captures RN's native event
     // blocks, so `emit` can deliver `onValueChange` through RN's own pipeline.
-    const view = this.eventView(UISwitch)
+    const view = this.hostView(UISwitch)
       .alloc()
       .initWithFrame(CGRectMake(0, 0, 51, 31));
     this.onControl(view, UIControlEvents.ValueChanged, () =>
@@ -103,7 +103,7 @@ class WorkerMap extends NativeComponent {
   private annotations = new Map<string, any>(); // pin id -> MKPointAnnotation
 
   create() {
-    const map = this.eventView(MKMapView)
+    const map = this.hostView(MKMapView)
       .alloc()
       .initWithFrame(CGRectMake(0, 0, 320, 320));
     map.showsUserLocation = false;
@@ -211,5 +211,70 @@ class WorkerMap extends NativeComponent {
   }
 }
 
-registerComponents([WorkerBadge, WorkerSwitch, WorkerMap]);
+/**
+ * A container component: real UIKit chrome around ordinary React children.
+ *
+ * `UIVisualEffectView` is the classic "you need a native module for this" view —
+ * a live backdrop blur RN cannot express in JS. Here it is the host view of a
+ * worker-defined component, and everything you nest inside it in JSX is still
+ * plain React: `<Text>`, `<Image>`, `<Pressable>`, even another worker-defined
+ * component.
+ *
+ * The children arrive through React Native's own mounting path — Fabric's
+ * legacy-interop layer calls `insertReactSubview:atIndex:` then
+ * `didUpdateReactSubviews` on this view, and Yoga has already laid each child out
+ * against this view's box. The only thing this component does is say WHERE they
+ * land: `UIVisualEffectView` requires its subviews to go into `contentView`, so
+ * `childrenView()` returns that instead of the view itself.
+ */
+class WorkerCard extends NativeComponent {
+  static props = ['material', 'cornerRadius'];
+  static events = ['onChildrenChange'];
+
+  create() {
+    const view = this.hostView(UIVisualEffectView)
+      .alloc()
+      .initWithEffect(UIBlurEffect.effectWithStyle(UIBlurEffectStyle.Regular));
+    view.clipsToBounds = true;
+    view.layer.cornerRadius = 16;
+    view.layer.borderWidth = 1;
+    view.layer.borderColor = UIColor.colorWithWhiteAlpha(1, 0.35).CGColor;
+    return view;
+  }
+
+  /** React children are subviews of the blur's `contentView`, not of the effect
+   *  view — the placement UIKit demands, invisible to the JSX above. */
+  childrenView() {
+    return this.view.contentView;
+  }
+
+  /** React mounted or unmounted children. On the first mount this runs before RN
+   *  has set the event props, so hop a tick — by then the `onChildrenChange`
+   *  block is captured and the very first count is delivered too. */
+  childrenChanged(count: number) {
+    setTimeout(() => this.emit('onChildrenChange', { count }), 0);
+  }
+
+  update(props: {
+    material?: 'regular' | 'thin' | 'chrome' | 'dark';
+    cornerRadius?: number;
+  }) {
+    if (props.material) {
+      this.view.effect = UIBlurEffect.effectWithStyle(
+        props.material === 'thin'
+          ? UIBlurEffectStyle.SystemThinMaterial
+          : props.material === 'chrome'
+            ? UIBlurEffectStyle.SystemChromeMaterial
+            : props.material === 'dark'
+              ? UIBlurEffectStyle.SystemMaterialDark
+              : UIBlurEffectStyle.Regular
+      );
+    }
+    if (typeof props.cornerRadius === 'number') {
+      this.view.layer.cornerRadius = props.cornerRadius;
+    }
+  }
+}
+
+registerComponents([WorkerBadge, WorkerSwitch, WorkerMap, WorkerCard]);
 serveComponents();

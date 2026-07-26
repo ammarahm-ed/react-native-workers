@@ -107,6 +107,18 @@ android {
     }
 }
 
+// Release worker bundling: builds one standalone bundle per `new Worker('./x')`
+// entry and ships them in the APK's assets, since there is no Metro to fetch
+// from in release. A consumer app resolves this through node:
+//
+//   apply from: new File(["node", "--print",
+//     "require.resolve('@ammarahmed/react-native-workers/package.json')"]
+//     .execute(null, rootDir).text.trim(), "../android/worker-bundles.gradle")
+//
+// This example is a yarn workspace that consumes the library from source and
+// has no node_modules entry for it, so it points at the file directly.
+apply from: file("$rootDir/../../android/worker-bundles.gradle")
+
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")

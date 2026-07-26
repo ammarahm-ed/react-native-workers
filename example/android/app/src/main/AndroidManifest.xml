@@ -22,6 +22,13 @@
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
         </intent-filter>
+        <!-- Dev deep link: rnworkers://screen/<id> — see src/App.tsx -->
+        <intent-filter>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.DEFAULT" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="rnworkers" android:host="screen" />
+        </intent-filter>
       </activity>
     </application>
 </manifest>

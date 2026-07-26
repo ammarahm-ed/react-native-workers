@@ -181,10 +181,13 @@ struct SVRuntimeSubs {
     std::lock_guard<std::mutex> lock(mutex);
     entries.emplace_back(std::move(cell), std::move(sub));
   }
-  void remove(uint64_t id) {
+  // Pointer identity, not id: ids are per-cell (nextSubId), so subscriptions on
+  // two different cells can share an id and an id-based erase could remove the
+  // wrong cell's entry (see the same fix in SharedStore's RuntimeSubscriptions).
+  void remove(const SVSubscriber* sub) {
     std::lock_guard<std::mutex> lock(mutex);
     for (size_t i = 0; i < entries.size(); ++i) {
-      if (entries[i].second->id == id) {
+      if (entries[i].second.get() == sub) {
         entries.erase(entries.begin() + i);
         return;
       }
@@ -265,7 +268,7 @@ class SharedValueHandle : public HostObject {
                   if (s.empty())
                     cell->hasSubs.store(false, std::memory_order_release);
                 }
-                runtimeSubs->remove(sub->id);
+                runtimeSubs->remove(sub.get());
                 return Value::undefined();
               });
         });

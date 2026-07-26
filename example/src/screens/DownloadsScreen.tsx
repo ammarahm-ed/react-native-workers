@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Text, View, StyleSheet, Pressable, ScrollView } from 'react-native';
 import { Worker, SharedValue } from '@ammarahmed/react-native-workers';
+import { markReady } from '../devReady';
 
 const COUNT = 6;
 const LABELS = [
@@ -64,6 +65,7 @@ export default function DownloadsScreen() {
         state: new SharedValue(c.state, 0),
       }));
       setReady(true);
+      markReady('downloads', 'data');
       // Kick off immediately so the screen shows the point on arrival. Tapping a
       // row pauses/resumes it, and the buttons drive them all.
       (w.module('downloads') as any).startAll();

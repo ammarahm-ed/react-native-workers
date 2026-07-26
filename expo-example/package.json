@@ -1,0 +1,34 @@
+{
+  "name": "rn-workers-expo-example",
+  "version": "0.0.1",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "prebuild": "expo prebuild --clean",
+    "prebuild:android": "expo prebuild --platform android --clean",
+    "prebuild:ios": "expo prebuild --platform ios --clean",
+    "sync-lib": "npm run pack-lib && npm install ./react-native-workers.tgz",
+    "pack-lib": "cd .. && npm run prepare && npm pack --ignore-scripts --pack-destination ./expo-example && cd expo-example && node -e \"const fs=require('fs'),p=require('../package.json');fs.renameSync('ammarahmed-react-native-workers-'+p.version+'.tgz','react-native-workers.tgz')\""
+  },
+  "dependencies": {
+    "@ammarahmed/react-native-workers": "file:react-native-workers.tgz",
+    "expo": "~54.0.0",
+    "expo-application": "~7.0.8",
+    "expo-constants": "~18.0.13",
+    "expo-crypto": "~15.0.9",
+    "expo-device": "~8.0.10",
+    "react": "19.1.0",
+    "react-native": "0.81.4"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.25.2",
+    "@types/react": "~19.1.0",
+    "typescript": "~5.9.2"
+  },
+  "engines": {
+    "node": ">= 22.11.0"
+  }
+}

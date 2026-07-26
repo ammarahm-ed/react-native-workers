@@ -15,6 +15,7 @@ import {
 import { runConformance } from '../conformance';
 import { runBridgeTests } from '../bridgeTests';
 import { runPrimitivesTests } from '../primitivesTests';
+import { markReady } from '../devReady';
 
 type Result = { name: string; pass: boolean; detail: string };
 
@@ -52,7 +53,7 @@ const NATIVE_CODE = `
   self.onmessage = (e) => {
     try {
       var mod = globalThis.__rnworkersGetModule('ReactNativeWorkers');
-      self.postMessage({ product: mod.multiply(6, 7) });
+      self.postMessage({ reachable: !!mod && typeof mod.createWorker === 'function' });
     } catch (err) {
       self.postMessage({ error: String(err && err.message || err) });
     }
@@ -128,7 +129,7 @@ export default function TestsScreen() {
         const nat = await once(NATIVE_CODE, 'go');
         all.push({
           name: 'phase3-native-module',
-          pass: nat?.product === 42,
+          pass: nat?.reachable === true,
           detail: JSON.stringify(nat),
         });
 
@@ -743,6 +744,7 @@ export default function TestsScreen() {
 
       setResults(all);
       setRunning(false);
+      markReady('tests', 'data');
       // Emit a machine-readable summary for CI / logcat verification.
       const passedCount = all.filter((r) => r.pass).length;
       console.log(

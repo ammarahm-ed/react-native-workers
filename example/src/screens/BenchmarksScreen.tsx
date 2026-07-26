@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Text, View, StyleSheet, ScrollView } from 'react-native';
 import { runBenchmarks, type Bench } from '../bench';
+import { markReady } from '../devReady';
 
 export default function BenchmarksScreen() {
   const [benches, setBenches] = useState<Bench[]>([]);
@@ -13,6 +14,7 @@ export default function BenchmarksScreen() {
         const b = await runBenchmarks();
         if (cancelled) return;
         setBenches(b);
+        markReady('benchmarks', 'data');
         // Machine-readable summary, same shape the test screen emits.
         console.log(
           `[RNWORKERS-BENCH] ${JSON.stringify(

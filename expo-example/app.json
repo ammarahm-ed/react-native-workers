@@ -1,0 +1,32 @@
+{
+  "expo": {
+    "name": "RN Workers (Expo)",
+    "slug": "rn-workers-expo-example",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "icon": "./assets/icon.png",
+    "ios": {
+      "bundleIdentifier": "com.ammarahmed.rnworkers.expoexample",
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "com.ammarahmed.rnworkers.expoexample",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1F2229"
+      }
+    },
+    "jsEngine": "hermes",
+    "plugins": [
+      [
+        "@ammarahmed/react-native-workers",
+        {
+          "androidNativeModules": true,
+          "releaseBundling": true
+        }
+      ]
+    ]
+  }
+}

@@ -32,10 +32,17 @@ function metroBundleUrl(id: string): string {
   const scriptURL: string | undefined =
     (NativeModules as any)?.SourceCode?.getConstants?.().scriptURL ??
     (NativeModules as any)?.SourceCode?.scriptURL;
-  // e.g. http://localhost:8081/index.bundle?platform=ios&dev=true
-  const base = scriptURL
-    ? scriptURL.replace(/\/[^/]*$/, '/')
-    : 'http://localhost:8081/';
+  // A worker bundle is a Metro entry resolved from the project root and served at
+  // `<origin>/<id>.bundle`, so the base must be just the server ORIGIN
+  // (scheme://host:port) — NOT the directory the app's own bundle sits in. The
+  // main bundle is not always at the server root: Expo serves it from a virtual
+  // entry (e.g. `/.expo/.virtual-metro-entry.bundle`), so stripping the last path
+  // segment would prepend `/.expo/` and 404. Taking the origin is correct on both
+  // bare React Native and Expo, and on localhost or a LAN/device address.
+  // e.g. http://localhost:8081/index.bundle?... or
+  //      http://192.168.1.5:8081/.expo/.virtual-metro-entry.bundle?...
+  const originMatch = scriptURL && scriptURL.match(/^(https?:\/\/[^/]+)/);
+  const origin = originMatch ? originMatch[1] : 'http://localhost:8081';
   // `resolver.rnworkers` marks this as a worker graph, which is what makes the
   // `withWorkers()` Metro config resolve `react-native` to the worker shim
   // instead of the full barrel. It must match the flag the release CLI passes,
@@ -43,7 +50,7 @@ function metroBundleUrl(id: string): string {
   const query =
     `platform=${Platform.OS}&dev=true&minify=false&modulesOnly=false&runModule=true` +
     `&resolver.rnworkers=true`;
-  return `${base}${id}.bundle?${query}`;
+  return `${origin}/${id}.bundle?${query}`;
 }
 
 export function resolveWorkerSource(source: WorkerSourceInput): ResolvedSource {

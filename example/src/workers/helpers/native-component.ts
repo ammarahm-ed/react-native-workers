@@ -17,6 +17,13 @@
 //     signature), so we invoke it through the Obj-C runtime instead — see the
 //     "Native events" section below. No RPC for events.
 //
+//   • Children flow through RN's OWN pipeline too. Fabric's legacy-interop layer
+//     mounts each React child into the view manager's view with
+//     `insertReactSubview:atIndex:` + `didUpdateReactSubviews` (`UIView+React.h`),
+//     whose default implementation just `addSubview:`s them — so a container
+//     component gets nested React children for free. Overriding
+//     `childrenView()` re-parents them into a native subview instead.
+//
 // The objc-runtime C functions (`sel_registerName`, `class_addMethod`,
 // `imp_implementationWithBlock`, …) are all in the regenerated interop metadata.
 import NativeScript from '@nativescript/react-native';
@@ -49,7 +56,7 @@ export abstract class NativeComponent {
 
   /** Fire an event to the matching `on<Event>` React prop; `payload` → `nativeEvent`.
    *  Goes through RN's own native event pipeline — no bridge. Requires the view to
-   *  have been built with `eventView()` so RN's dispatching block was captured. */
+   *  have been built with `hostView()` so RN's dispatching block was captured. */
   emit(event: string, payload: Props = {}): void {
     const handler = eventHandlers.get(this.view)?.[event];
     // No handler yet means React hasn't attached an `on<Event>` prop — like a
@@ -57,11 +64,22 @@ export abstract class NativeComponent {
     if (handler) fireNativeBlock(handler, payload);
   }
 
+  /** Where React children mount. Defaults to the view itself — override to nest
+   *  them inside a native subview (a `UIVisualEffectView`'s `contentView`, a
+   *  scroll view's content, …). Only consulted for views built with `hostView()`. */
+  childrenView(): any {
+    return this.view;
+  }
+
+  /** Called after React mounted or unmounted children, with the new child count. */
+  childrenChanged(_count: number): void {}
+
   /** The view class to build in `create()` so this component's declared `events`
-   *  are delivered through RN's native pipeline:
-   *  `const view = this.eventView(UISwitch).alloc().initWithFrame(…)`. */
-  eventView(Base: any): any {
-    return defineEventView(
+   *  are delivered through RN's native pipeline and its React children are routed
+   *  through `childrenView()`:
+   *  `const view = this.hostView(UISwitch).alloc().initWithFrame(…)`. */
+  hostView(Base: any): any {
+    return defineHostView(
       Base,
       (this.constructor as ComponentClass).events ?? []
     );
@@ -151,22 +169,48 @@ function promoteToClassMethod(cls: any, selector: string): void {
 const eventHandlers = new WeakMap<any, Record<string, any>>(); // view → { event: RN block }
 let classCounter = 0;
 let fireSel: any;
-const eventViewCache = new Map<string, any>();
+const hostViewCache = new Map<string, any>();
+const childCounts = new WeakMap<any, number>(); // view → last React child count
 
 function eventSetter(event: string): string {
   return `set${event[0]!.toUpperCase()}${event.slice(1)}:`; // onValueChange → setOnValueChange:
 }
 
-/** A subclass of `Base` that captures RN's dispatching block for each event. RN's
- *  `createEventSetter` KVC-calls `set<Event>:` on the view; the block arrives as a
- *  JS wrapper we stash keyed by the view. Cached per (base, events). */
-export function defineEventView(Base: any, events: string[]): any {
-  if (!events.length) return Base;
+/** A subclass of `Base` that (a) captures RN's dispatching block for each event —
+ *  RN's `createEventSetter` KVC-calls `set<Event>:` on the view, and the block
+ *  arrives as a JS wrapper we stash keyed by the view — and (b) routes React
+ *  children through the component's `childrenView()`. Cached per (base, events). */
+export function defineHostView(Base: any, events: string[]): any {
   const key = `${Base?.name ?? '?'}:${events.join(',')}`;
-  let Sub = eventViewCache.get(key);
+  let Sub = hostViewCache.get(key);
   if (Sub) return Sub;
   const methods: Record<string, any> = {};
   const exposed: Record<string, any> = {};
+
+  // React children. Fabric's interop layer has already recorded them with the
+  // default `insertReactSubview:atIndex:` (so RN's own bookkeeping stays intact);
+  // this is the hook that decides where they actually land. Re-`addSubview:`ing
+  // every child in order also settles their z-order, exactly like RN's default.
+  //
+  // RN calls this at the end of EVERY update of the view, not just when the
+  // children changed, so `childrenChanged()` is only forwarded when the count
+  // actually moved — otherwise a component that reacts to it (by emitting an
+  // event, say) would drive an endless render loop.
+  methods.didUpdateReactSubviews = function (this: any) {
+    const instance = instances.get(this);
+    const container = instance?.childrenView() ?? this;
+    const children = this.reactSubviews(); // NSArray, RN's own child list
+    const count = children ? children.count : 0;
+    for (let i = 0; i < count; i++) {
+      container.addSubview(children.objectAtIndex(i));
+    }
+    if (instance && childCounts.get(this) !== count) {
+      childCounts.set(this, count);
+      instance.childrenChanged(count);
+    }
+  };
+  exposed.didUpdateReactSubviews = { returns: objcVoid, params: [] };
+
   for (const event of events) {
     const selector = eventSetter(event); // one colon = one param
     methods[selector] = function (this: any, handler: any) {
@@ -177,10 +221,10 @@ export function defineEventView(Base: any, events: string[]): any {
     exposed[selector] = { returns: objcVoid, params: [g.NSObject] };
   }
   Sub = Base.extend(methods, {
-    name: `RNWEventView_${classCounter++}`,
+    name: `RNWHostView_${classCounter++}`,
     exposedMethods: exposed,
   });
-  eventViewCache.set(key, Sub);
+  hostViewCache.set(key, Sub);
   return Sub;
 }
 

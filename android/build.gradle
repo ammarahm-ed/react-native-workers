@@ -34,6 +34,26 @@ apply plugin: "kotlin-android"
 // AAR only ships the Kotlin WorkerTurboModules bridge.
 apply plugin: "com.facebook.react"
 
+// Resolve the consumer's react-native minor so we can pick the right
+// WorkerReactContext variant: RN 0.87 added an abstract
+// `ReactContext.getRuntimeExecutor()` that 0.81–0.86 lack, so the concrete subclass
+// must differ (src/rn87 overrides it, src/rnLegacy doesn't). Defaults to the legacy
+// variant if the version can't be resolved.
+def reactNativeAtLeast087 = {
+  try {
+    def version = ["node", "-e", "console.log(require('react-native/package.json').version)"]
+      .execute(null, projectDir).text.trim()
+    def parts = version.tokenize('.-')
+    def major = parts[0].toInteger()
+    def minor = parts[1].toInteger()
+    logger.info("ReactNativeWorkers: resolved react-native ${version} (>=0.87: ${major > 0 || minor >= 87})")
+    return major > 0 || minor >= 87
+  } catch (Exception e) {
+    logger.warn("ReactNativeWorkers: could not resolve react-native version (${e.message}); assuming < 0.87")
+    return false
+  }
+}()
+
 android {
   namespace "com.ammarahmed.reactnativeworkers"
 
@@ -47,8 +67,34 @@ android {
     sourceCompatibility JavaVersion.VERSION_17
     targetCompatibility JavaVersion.VERSION_17
   }
+
+  // The Expo worker bridge (WorkerExpoModules.kt) references expo-modules-core
+  // Kotlin APIs, so it is only compiled/shipped when the consumer is an Expo app
+  // (the `:expo-modules-core` Gradle project is present via Expo autolinking).
+  // Non-Expo apps never see it; the C++ installer then just fails to find the
+  // class and no-ops.
+  sourceSets {
+    main {
+      java {
+        // WorkerReactContextImpl variant chosen by RN version (see above).
+        srcDirs += reactNativeAtLeast087 ? "src/rn87/java" : "src/rnLegacy/java"
+        // The Expo worker bridge references expo-modules-core Kotlin APIs, so it's
+        // only compiled/shipped when the consumer is an Expo app (the
+        // :expo-modules-core Gradle project is present via Expo autolinking).
+        if (project.findProject(":expo-modules-core") != null) {
+          srcDirs += "src/expo/java"
+        }
+      }
+    }
+  }
 }
 
 dependencies {
   implementation "com.facebook.react:react-android"
+
+  // Compile-only: the Expo app itself provides expo-modules-core at runtime, so we
+  // never bundle it (avoids a duplicate). Present only in Expo apps.
+  if (project.findProject(":expo-modules-core") != null) {
+    compileOnly project(":expo-modules-core")
+  }
 }

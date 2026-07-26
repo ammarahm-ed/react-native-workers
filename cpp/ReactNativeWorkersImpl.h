@@ -5,6 +5,7 @@
 #include <react/bridging/Promise.h>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -13,6 +14,7 @@
 
 #include "core/Worker.h"
 #include "core/WorkerTypes.h"
+#include "runtime/HostThreadWaker.h"
 
 namespace facebook::react {
 
@@ -22,8 +24,6 @@ class ReactNativeWorkersImpl
  public:
   ReactNativeWorkersImpl(std::shared_ptr<CallInvoker> jsInvoker);
   ~ReactNativeWorkersImpl() override;
-
-  double multiply(jsi::Runtime& rt, double a, double b);
 
   // Installs the JSI globals (__RNWorkersPostMessage) used by the JS Worker.
   bool install(jsi::Runtime& rt);
@@ -99,6 +99,20 @@ class ReactNativeWorkersImpl
   // device events (once per runtime, not per connection).
   std::unordered_set<uint32_t> deviceEventRuntimes_;
   uint32_t nextId_ = 1;
+
+  // --- Host-thread delivery ---------------------------------------------------
+  //
+  // Every worker->host delivery goes through postToHost(). It prefers a native
+  // wakeup of the host JS thread (see runtime/HostThreadWaker.h) so a message
+  // moving between two C++ threads never enters the JVM, and falls back to the
+  // CallInvoker where no native waker exists (iOS, or a host thread with no
+  // native looper).
+  void postToHost(std::function<void(jsi::Runtime&)> task);
+
+  // Installed lazily, on the host JS thread, on first delivery. Null means "use
+  // the CallInvoker" — either unsupported here, or installation failed.
+  std::shared_ptr<workers::HostThreadWaker> hostWaker_;
+  bool hostWakerTried_ = false;
 };
 
 } // namespace facebook::react

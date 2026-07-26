@@ -1,0 +1,281 @@
+#!/usr/bin/env node
+// Local compatibility-matrix runner.
+//
+// Packs the library once, then for each requested React Native version / Expo SDK
+// it scaffolds a fresh consumer app under `.matrix/<name>/`, installs the packed
+// tarball, and compiles the native code (Android by default; iOS with --platform
+// ios). It's the local twin of .github/workflows/compat-matrix.yml — same idea,
+// but you can debug a failure and re-run just that version in seconds instead of
+// waiting on CI.
+//
+// Resumable: results are recorded in `.matrix/results.json`. A target that already
+// PASSED is skipped on the next run; FAILED / new targets are (re)built. After
+// fixing the library, `--pack` rebuilds the tarball and failed apps pick it up
+// (the app scaffold is reused — only the tarball is reinstalled + rebuilt).
+//
+// Examples:
+//   yarn matrix                      # all RN + Expo, Android, pack first
+//   yarn matrix --rn=0.86            # just RN 0.86
+//   yarn matrix --expo=57 --pack     # repack lib, build Expo SDK 57
+//   yarn matrix --only=rn --force    # rebuild every RN target from scratch
+//   yarn matrix --platform=ios --rn=latest
+//
+// Flags:
+//   --rn=a,b       RN minors to run (default: 0.81..0.86,latest,next)
+//   --expo=a,b     Expo SDKs to run (default: 54..57,latest)
+//   --only=rn|expo run only one side of the matrix
+//   --platform=    android (default) | ios
+//   --pack         (re)build + repack the library tarball before running
+//   --force        rebuild even targets recorded as PASS (re-scaffolds the app)
+//   --bail         stop at the first failure (default: keep going)
+
+import { execSync, spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const MATRIX_DIR = path.join(ROOT, '.matrix');
+const TARBALL = path.join(MATRIX_DIR, 'react-native-workers.tgz');
+const RESULTS = path.join(MATRIX_DIR, 'results.json');
+
+const DEFAULT_RN = ['0.81', '0.82', '0.83', '0.84', '0.85', '0.86', 'latest', 'next'];
+const DEFAULT_EXPO = ['54', '55', '56', '57', 'latest'];
+
+// ---- args ----
+const args = Object.fromEntries(
+  process.argv.slice(2).map((a) => {
+    const [k, v] = a.replace(/^--/, '').split('=');
+    return [k, v ?? true];
+  })
+);
+const platform = args.platform === 'ios' ? 'ios' : 'android';
+const only = args.only; // 'rn' | 'expo' | undefined
+const doPack = !!args.pack;
+const force = !!args.force;
+const bail = !!args.bail;
+const rnList = args.rn ? String(args.rn).split(',') : DEFAULT_RN;
+const expoList = args.expo ? String(args.expo).split(',') : DEFAULT_EXPO;
+
+// ---- helpers ----
+const log = (...m) => console.log('[matrix]', ...m);
+const die = (m) => {
+  console.error('[matrix] FATAL:', m);
+  process.exit(1);
+};
+
+// Subshell env: prepend THIS node's bin dir so `bash -c` (non-login) resolves the
+// same working node/npm/npx as the runner — bypassing a Volta shim that has no
+// default version in a fresh scratch dir. A login shell (`-l`) would re-trigger it.
+const CHILD_ENV = {
+  ...process.env,
+  PATH: `${path.dirname(process.execPath)}:${process.env.PATH}`,
+};
+
+/** Run a command, streaming its output into `<dir>/build.log`. Returns true on success. */
+function run(cmd, cwd, logPath) {
+  fs.appendFileSync(logPath, `\n$ ${cmd}\n`);
+  const fd = fs.openSync(logPath, 'a');
+  const res = spawnSync('bash', ['-c', cmd], { cwd, env: CHILD_ENV, stdio: ['ignore', fd, fd] });
+  fs.closeSync(fd);
+  return res.status === 0;
+}
+
+function resolveNpmVersion(spec) {
+  const out = execSync(`npm view "react-native@${spec}" version`, {
+    encoding: 'utf8',
+    env: CHILD_ENV,
+  }).trim();
+  // npm may print multiple lines for ranges; take the last (highest).
+  return out.split('\n').pop().replace(/.*'([^']+)'.*/, '$1').trim() || out;
+}
+
+function loadResults() {
+  try {
+    return JSON.parse(fs.readFileSync(RESULTS, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+function saveResults(r) {
+  fs.writeFileSync(RESULTS, JSON.stringify(r, null, 2));
+}
+
+// ---- pack the library ----
+function packLibrary() {
+  log('building + packing the library…');
+  execSync('yarn prepare', { cwd: ROOT, stdio: 'inherit', env: CHILD_ENV });
+  // npm pack prints the tarball name; capture and move to a stable path.
+  const name = execSync('npm pack --pack-destination "' + MATRIX_DIR + '"', {
+    cwd: ROOT,
+    encoding: 'utf8',
+    env: CHILD_ENV,
+  })
+    .trim()
+    .split('\n')
+    .pop()
+    .trim();
+  fs.renameSync(path.join(MATRIX_DIR, name), TARBALL);
+  log('packed →', path.relative(ROOT, TARBALL));
+}
+
+// ---- scaffolding ----
+// Log to a SIBLING file (`.matrix/<dir>.log`), never inside the app dir — the
+// scaffolders (cli init / create-expo-app) refuse a non-empty target dir.
+const logPathFor = (dir) => path.join(MATRIX_DIR, `${dir}.log`);
+
+function scaffoldRn(fullVersion, dir) {
+  const abs = path.join(MATRIX_DIR, dir);
+  const logPath = logPathFor(dir);
+  fs.rmSync(abs, { recursive: true, force: true }); // init needs a fresh directory
+  fs.writeFileSync(logPath, `# ${dir} — react-native ${fullVersion}\n`);
+  // New Architecture is the default on RN 0.81+ (required by this library).
+  const ok = run(
+    `npx --yes @react-native-community/cli@latest init MatrixApp ` +
+      `--directory "${abs}" --version "${fullVersion}" --pm npm --skip-git-init --install-pods false`,
+    MATRIX_DIR,
+    logPath
+  );
+  return { ok, logPath };
+}
+
+function scaffoldExpo(sdk, dir) {
+  const abs = path.join(MATRIX_DIR, dir);
+  const logPath = logPathFor(dir);
+  // create-expo-app wants a non-existing (or empty) target dir.
+  fs.rmSync(abs, { recursive: true, force: true });
+  fs.writeFileSync(logPath, `# ${dir} — expo sdk ${sdk}\n`);
+  // Scaffold directly from the SDK-PINNED blank template (dist-tag `sdk-54`, …).
+  // Downgrading a latest-SDK template instead conflicts on expo-router peers.
+  const template =
+    sdk === 'latest' ? 'expo-template-blank' : `expo-template-blank@sdk-${sdk}`;
+  const ok =
+    run(
+      `npx --yes create-expo-app@latest "${abs}" --no-install --yes --template ${template}`,
+      MATRIX_DIR,
+      logPath
+    ) &&
+    run(`npm install --legacy-peer-deps`, abs, logPath) &&
+    run(`npx expo install expo-device expo-crypto`, abs, logPath) &&
+    run(`npx expo prebuild --platform ${platform} --no-install`, abs, logPath);
+  return { ok, logPath };
+}
+
+function installTarball(dir, logPath) {
+  const abs = path.join(MATRIX_DIR, dir);
+  // --legacy-peer-deps so a prerelease RN (the `next`/nightly channel) doesn't fail
+  // the install on a strict peer-range mismatch — we still want the compile signal.
+  return run(`npm install "${TARBALL}" --legacy-peer-deps`, abs, logPath);
+}
+
+function build(dir, logPath) {
+  const abs = path.join(MATRIX_DIR, dir);
+  if (platform === 'android') {
+    return run(
+      `cd android && ./gradlew :app:assembleDebug -PreactNativeArchitectures=arm64-v8a --console=plain`,
+      abs,
+      logPath
+    );
+  }
+  // iOS
+  const workspace = fs.readdirSync(path.join(abs, 'ios')).find((f) => f.endsWith('.xcworkspace'));
+  const scheme = workspace ? workspace.replace('.xcworkspace', '') : 'MatrixApp';
+  return (
+    run(`cd ios && pod install`, abs, logPath) &&
+    run(
+      `cd ios && xcodebuild -workspace "${workspace}" -scheme "${scheme}" ` +
+        `-configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' ` +
+        `build CODE_SIGNING_ALLOWED=NO`,
+      abs,
+      logPath
+    )
+  );
+}
+
+// ---- targets ----
+const targets = [];
+if (only !== 'expo') {
+  for (const rn of rnList) targets.push({ kind: 'rn', spec: rn, dir: `rn_${rn}` });
+}
+if (only !== 'rn') {
+  for (const sdk of expoList) targets.push({ kind: 'expo', spec: sdk, dir: `expo_${sdk}` });
+}
+
+// ---- run ----
+fs.mkdirSync(MATRIX_DIR, { recursive: true });
+if (doPack || !fs.existsSync(TARBALL)) packLibrary();
+else log('reusing existing tarball (pass --pack to rebuild):', path.relative(ROOT, TARBALL));
+
+const results = loadResults();
+for (const t of targets) {
+  const key = `${platform}:${t.dir}`;
+  if (!force && results[key]?.status === 'pass') {
+    log(`SKIP ${key} (already passing; --force to rebuild)`);
+    continue;
+  }
+  const abs = path.join(MATRIX_DIR, t.dir);
+  const logPath = logPathFor(t.dir);
+  // "Scaffolded" requires BOTH package.json AND the native dir — a target that
+  // failed at scaffold (e.g. prebuild never produced `android/`) must be redone,
+  // not reused. Only a target that got a full scaffold (and maybe failed at build)
+  // is reused so we just reinstall the tarball + rebuild.
+  const scaffolded =
+    !force &&
+    fs.existsSync(path.join(abs, 'package.json')) &&
+    fs.existsSync(path.join(abs, platform));
+
+  log(`── ${key} ──`);
+  try {
+    let resolved = t.spec;
+    if (t.kind === 'rn' && !scaffolded) resolved = resolveNpmVersion(t.spec);
+
+    if (!scaffolded) {
+      log(`scaffolding ${t.kind} ${t.kind === 'rn' ? resolved : 'sdk ' + t.spec}…`);
+      const s = t.kind === 'rn' ? scaffoldRn(resolved, t.dir) : scaffoldExpo(t.spec, t.dir);
+      if (!s.ok) throw new Error(`scaffold failed — see ${path.relative(ROOT, s.logPath)}`);
+    } else {
+      log('reusing existing app scaffold');
+    }
+
+    log('installing library tarball…');
+    if (!installTarball(t.dir, logPath)) throw new Error('tarball install failed');
+
+    log(`building (${platform})… this is the slow part`);
+    if (!build(t.dir, logPath)) throw new Error(`build failed — see ${path.relative(ROOT, logPath)}`);
+
+    results[key] = { status: 'pass', spec: t.spec, at: new Date().toISOString() };
+    log(`PASS ${key}`);
+  } catch (e) {
+    results[key] = { status: 'fail', spec: t.spec, error: String(e.message || e) };
+    log(`FAIL ${key}: ${e.message || e}`);
+    // Surface the tail of the build log for quick diagnosis.
+    try {
+      const tail = execSync(`tail -40 "${logPath}"`, { encoding: 'utf8' });
+      console.log(tail);
+    } catch {}
+    if (bail) {
+      saveResults(results);
+      die(`bailing at first failure (${key})`);
+    }
+  }
+  saveResults(results);
+}
+
+// ---- summary ----
+// Pre-release channels (RN `next`) are early-warning only: a break there flags an
+// UPCOMING RN/Expo release, not a regression in a supported version, so it's shown
+// but doesn't fail the run.
+const PRERELEASE = new Set(['next']);
+saveResults(results);
+log('──────── summary ────────');
+let fails = 0;
+for (const t of targets) {
+  const r = results[`${platform}:${t.dir}`];
+  const s = r?.status ?? 'skip';
+  const info = PRERELEASE.has(t.spec);
+  if (s === 'fail' && !info) fails++;
+  const icon = s === 'pass' ? '✅' : s === 'fail' ? (info ? '⚠️' : '❌') : '·';
+  const note = s === 'fail' && info ? ' — pre-release, informational (see notes)' : '';
+  log(`${icon} ${platform}:${t.dir} (${s})${note}`);
+}
+process.exit(fails > 0 ? 1 : 0);

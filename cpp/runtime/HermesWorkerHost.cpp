@@ -83,11 +83,17 @@ class HermesWorkerHost::InertInvoker : public CallInvoker {
 };
 
 HermesWorkerHost::HermesWorkerHost(std::string name, uint32_t maxHeapMb)
-    : name_(std::move(name)), maxHeapMb_(maxHeapMb ? maxHeapMb : 256) {}
+    : name_(std::move(name)),
+      maxHeapMb_(maxHeapMb ? maxHeapMb : 256),
+      // Created eagerly so callInvoker() is safe from any thread (a lazy init
+      // there would race two first callers).
+      invokerShared_(std::make_shared<InvokerShared>()) {
+  invokerShared_->host = this;
+}
 
 HermesWorkerHost::~HermesWorkerHost() {
   requestShutdown(/*immediate=*/true);
-  if (invokerShared_) {
+  {
     std::lock_guard<std::mutex> lock(invokerShared_->mutex);
     invokerShared_->host = nullptr;
   }
@@ -116,14 +122,11 @@ void HermesWorkerHost::post(Task&& task) {
     if (stop_) return;
     tasks_.push_back(std::move(task));
   }
-  cv_.notify_all();
+  // Exactly one waiter (the worker thread).
+  cv_.notify_one();
 }
 
 std::shared_ptr<CallInvoker> HermesWorkerHost::callInvoker() {
-  if (!invokerShared_) {
-    invokerShared_ = std::make_shared<InvokerShared>();
-    invokerShared_->host = this;
-  }
   return std::make_shared<InertInvoker>(invokerShared_);
 }
 

@@ -69,7 +69,12 @@ class UiWorkerHost : public WorkerRuntimeHost {
     std::unique_ptr<WorkerInspectorTarget> inspectorTarget;
   };
 
-  void scheduleTimer(uint32_t id, std::shared_ptr<TimerState> ts);
+  // Static on purpose: the delayed lambda outlives `this` when the host is
+  // reaped off-thread, so rescheduling must go through the shared State only.
+  static void scheduleTimer(
+      std::shared_ptr<State> state,
+      uint32_t id,
+      std::shared_ptr<TimerState> ts);
 
   std::string name_;
   std::shared_ptr<MainThreadScheduler> scheduler_;

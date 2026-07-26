@@ -1,8 +1,6 @@
 import { TurboModuleRegistry, type TurboModule } from 'react-native';
 
 export interface Spec extends TurboModule {
-  multiply(a: number, b: number): number;
-
   // Installs JSI globals used by the Worker class (idempotent).
   install(): boolean;
   // kind: 'inline' | 'url' | 'asset'. Returns the worker id. `nativeModules`

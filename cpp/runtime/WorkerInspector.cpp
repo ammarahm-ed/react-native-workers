@@ -1,5 +1,21 @@
 #include "WorkerInspector.h"
 
+#include <memory>
+#include <string>
+
+// Hermes ships the CDP implementation (hermes::cdp::CDPAgent / CDPDebugAPI) only
+// in debugger-enabled builds. The headers are present either way, but a release
+// Hermes has none of the symbols — referencing them unconditionally fails to
+// LINK a release app, which no runtime check can save us from. React Native
+// gates its own CDP code on exactly this macro (see HermesInstance.cpp), and
+// defines it for debug configurations only.
+//
+// Without the debugger there is nothing to attach to, so the whole file reduces
+// to a `registerWorkerInspectorTarget` that returns nullptr — the same value the
+// full implementation returns when the inspector is disabled at runtime, and a
+// case callers already handle.
+#ifdef HERMES_ENABLE_DEBUGGER
+
 #include <hermes/RuntimeTaskRunner.h>
 #include <hermes/cdp/CDPAgent.h>
 #include <hermes/cdp/CDPDebugAPI.h>
@@ -8,7 +24,6 @@
 #include <jsinspector-modern/InspectorInterfaces.h>
 
 #include <atomic>
-#include <memory>
 #include <mutex>
 #include <utility>
 
@@ -148,3 +163,18 @@ std::unique_ptr<WorkerInspectorTarget> registerWorkerInspectorTarget(
 }
 
 } // namespace facebook::react::workers
+
+#else // !HERMES_ENABLE_DEBUGGER
+
+namespace facebook::react::workers {
+
+std::unique_ptr<WorkerInspectorTarget> registerWorkerInspectorTarget(
+    const std::string&,
+    facebook::hermes::HermesRuntime&,
+    WorkerTaskPoster) {
+  return nullptr;
+}
+
+} // namespace facebook::react::workers
+
+#endif // HERMES_ENABLE_DEBUGGER

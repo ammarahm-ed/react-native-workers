@@ -188,17 +188,23 @@ std::shared_ptr<CallInvoker> UiWorkerHost::callInvoker() {
   return inv;
 }
 
-void UiWorkerHost::scheduleTimer(uint32_t id, std::shared_ptr<TimerState> ts) {
-  auto state = state_;
-  scheduler_->postDelayed(
-      [this, state, id, ts]() {
+void UiWorkerHost::scheduleTimer(
+    std::shared_ptr<State> state,
+    uint32_t id,
+    std::shared_ptr<TimerState> ts) {
+  // No `this` in the delayed lambda: the host can be destroyed (off-thread, via
+  // reap) while a delayed timer is still pending, so everything the callback
+  // needs — scheduler included — must come from the shared State it captures.
+  auto* scheduler = state->scheduler.get();
+  scheduler->postDelayed(
+      [state, id, ts]() {
         if (!ts->alive->load() || !state->runtime || state->stopped.load()) {
           return;
         }
         runGuarded(*state->runtime, [&] { ts->cb->call(*state->runtime); });
         state->runtime->drainMicrotasks();
         if (ts->repeat && ts->alive->load() && !state->stopped.load()) {
-          scheduleTimer(id, ts);
+          scheduleTimer(state, id, ts);
         } else {
           state->timers.erase(id);
         }
@@ -218,7 +224,7 @@ uint32_t UiWorkerHost::addTimer(
   ts->repeat = repeat;
   ts->alive = std::make_shared<std::atomic<bool>>(true);
   state_->timers[id] = ts;
-  scheduleTimer(id, ts);
+  scheduleTimer(state_, id, std::move(ts));
   return id;
 }
 

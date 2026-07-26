@@ -108,27 +108,56 @@ afterEvaluate { proj ->
         ])
 
         task.logger.lifecycle("[rn-workers] ${task.name}: " + cmd.join(" "))
-        proj.exec {
-          workingDir jsRoot
-          commandLine cmd
+
+        // ProcessBuilder rather than `project.exec {}`: Gradle 9 removed
+        // Project.exec(), and the replacement (an injected ExecOperations) is
+        // not available to a plain applied script. This also keeps the CLI's
+        // own progress/bytecode-summary output in the Gradle log, where it is
+        // the only signal that release worker bundles were actually produced.
+        def process = new ProcessBuilder(cmd)
+          .directory(jsRoot)
+          .redirectErrorStream(true)
+          .start()
+        process.inputStream.eachLine { line ->
+          task.logger.lifecycle("[rn-workers] ${line}")
+        }
+        def exit = process.waitFor()
+        if (exit != 0) {
+          throw new GradleException(
+            "[rn-workers] ${task.name} failed: rn-workers-bundle exited with ${exit}")
         }
       }
     }
 
     // Register the generated assets so the worker bundles land in the APK.
     // Prefer the variant-scoped source set; fall back to the build type's.
+    //
+    // The srcDir is the TASK PROVIDER, not the bare directory: that makes the
+    // resulting file collection carry a dependency on the task that produces it,
+    // so every consumer of the assets source set (asset merging, but also lint's
+    // model tasks and packaging) is ordered after it automatically. Passing the
+    // plain File instead makes Gradle 8+ fail validation with "uses this output
+    // ... without declaring an explicit or implicit dependency" for each such
+    // consumer — a list we would otherwise have to enumerate and keep current.
     try {
-      androidExt.sourceSets.getByName(variantName).assets.srcDir(generatedAssetsDir)
+      androidExt.sourceSets.getByName(variantName).assets.srcDir(workerTask)
     } catch (ignored) {
-      androidExt.sourceSets.getByName(buildTypeName).assets.srcDir(generatedAssetsDir)
+      androidExt.sourceSets.getByName(buildTypeName).assets.srcDir(workerTask)
     }
 
     // Ordering: run after the main JS bundle is produced, and before the assets
     // for this variant are merged into the APK.
-    proj.tasks.matching { it.name == "createBundle${capVariant}JsAndAssets" }
-      .configureEach { mainBundleTask ->
-        workerTask.configure { it.mustRunAfter(mainBundleTask) }
-      }
+    //
+    // `mustRunAfter` takes the lazy TaskCollection directly. Resolving it with
+    // `configureEach` and configuring `workerTask` from inside that callback
+    // would be configuring one task while another is being configured, which
+    // Gradle 8+ rejects ("NamedDomainObjectProvider.configure(Action) on task
+    // set cannot be executed in the current context").
+    workerTask.configure { task ->
+      task.mustRunAfter(
+        proj.tasks.matching { it.name == "createBundle${capVariant}JsAndAssets" }
+      )
+    }
     proj.tasks.matching { it.name == "merge${capVariant}Assets" }
       .configureEach { it.dependsOn(workerTask) }
   }

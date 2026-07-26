@@ -1,4 +1,3 @@
-export { multiply } from './multiply';
 export { Worker, UIWorker, nativeWorkerSelfTest } from './Worker';
 export { SharedStore } from './SharedStore';
 export type { StoreListener, Unsubscribe } from './SharedStore';

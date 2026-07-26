@@ -7,9 +7,11 @@ import {
   Pressable,
   BackHandler,
   Platform,
+  Linking,
 } from 'react-native';
 import HomeScreen from './screens/HomeScreen';
 import { findScreen, type ScreenId } from './screens';
+import { markReady } from './devReady';
 
 /**
  * Screen to open on launch instead of the home list. Inlined at build time by
@@ -23,6 +25,28 @@ import { findScreen, type ScreenId } from './screens';
  */
 const INITIAL_SCREEN: string | undefined =
   process.env.RN_WORKERS_SCREEN || undefined;
+
+/**
+ * Dev-only deep link, for when a Metro restart per screen is too slow (docs
+ * screenshots, a quick manual check):
+ *
+ *   xcrun simctl openurl booted rnworkers://screen/sensor
+ *   adb shell am start -a android.intent.action.VIEW -d rnworkers://screen/home
+ *
+ * `rnworkers://screen/home` returns to the list. The scheme is declared in the
+ * iOS Info.plist and the Android manifest; unlike `RN_WORKERS_SCREEN` it needs
+ * no rebuild and no cache reset.
+ */
+const LINK_PREFIX = 'rnworkers://screen/';
+
+function screenFromUrl(
+  url: string | null | undefined
+): ScreenId | null | undefined {
+  if (!url || !url.startsWith(LINK_PREFIX)) return undefined; // not ours
+  const id = url.slice(LINK_PREFIX.length).replace(/[/?#].*$/, '');
+  if (!id || id === 'home') return null;
+  return findScreen(id)?.id ?? null;
+}
 
 export default function App() {
   // `null` = home. Deep-linking to an unknown id falls back to home rather than
@@ -43,6 +67,23 @@ export default function App() {
     });
     return () => sub.remove();
   }, [current, goHome]);
+
+  useEffect(() => {
+    if (!__DEV__) return;
+    const handle = (url: string | null | undefined) => {
+      const next = screenFromUrl(url);
+      if (next === undefined) return;
+      setCurrent(next);
+    };
+    Linking.getInitialURL().then(handle);
+    const sub = Linking.addEventListener('url', (e) => handle(e.url));
+    return () => sub.remove();
+  }, []);
+
+  // Rendered-state marker for external tooling — see `devReady.ts`.
+  useEffect(() => {
+    markReady(current ?? 'home');
+  }, [current]);
 
   const screen = findScreen(current ?? undefined);
   const Component = screen?.component;

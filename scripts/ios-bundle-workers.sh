@@ -62,7 +62,16 @@ fi
 [ -z "$NODE_BINARY" ] && NODE_BINARY="node"
 
 # Locate the installed react-native-workers package (its cli/index.js).
-LIB=$("$NODE_BINARY" --print "require('path').dirname(require.resolve('@ammarahmed/react-native-workers/package.json', {paths: [process.cwd()]}))")
+#
+# RN_WORKERS_PACKAGE_ROOT lets a build point at the package directly. Normal apps
+# never need it — but a workspace that consumes the library from source (this
+# repo's own example, a monorepo using Metro aliases) may have no resolvable
+# `@ammarahmed/react-native-workers` entry in node_modules at all.
+if [[ -n "$RN_WORKERS_PACKAGE_ROOT" ]]; then
+  LIB="$RN_WORKERS_PACKAGE_ROOT"
+else
+  LIB=$("$NODE_BINARY" --print "require('path').dirname(require.resolve('@ammarahmed/react-native-workers/package.json', {paths: [process.cwd()]}))" 2>/dev/null || echo "")
+fi
 if [[ -z "$LIB" || ! -f "$LIB/cli/index.js" ]]; then
   echo "react-native-workers: could not locate @ammarahmed/react-native-workers CLI." >&2
   exit 1

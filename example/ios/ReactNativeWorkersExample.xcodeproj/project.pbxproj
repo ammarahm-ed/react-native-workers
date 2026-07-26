@@ -110,6 +110,7 @@
 				13B07F8C1A680F5B00A75B9A /* Frameworks */,
 				13B07F8E1A680F5B00A75B9A /* Resources */,
 				00DD1BFF1BD5951E006B06BC /* Bundle React Native code and images */,
+				A5D34C7A66F5B8BD3FC4ED4A /* [RN Workers] Bundle worker code */,
 				00EEFC60759A1932668264C0 /* [CP] Embed Pods Frameworks */,
 				E235C05ADACE081382539298 /* [CP] Copy Pods Resources */,
 				A5D34C7A66F5B8BD3FC4ED49 /* [RN Workers] Copy NativeScript metadata */,
@@ -218,6 +219,26 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "set -e\nSRC=\"${SRCROOT}/nativescript-metadata\"\nDEST=\"${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\nif [ -d \"$SRC\" ]; then\n  for f in \"$SRC\"/*.nsmd; do\n    [ -e \"$f\" ] || continue\n    echo \"note: NativeScript metadata -> $(basename \"$f\")\"\n    cp -f \"$f\" \"$DEST/\"\n  done\nfi\n";
+		};
+		A5D34C7A66F5B8BD3FC4ED4A /* [RN Workers] Bundle worker code */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/.xcode.env.local",
+				"$(SRCROOT)/.xcode.env",
+			);
+			name = "[RN Workers] Bundle worker code";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\n\n# Builds one standalone (Hermes-compiled) bundle per file worker into the\n# app's resources. Must run AFTER \"Bundle React Native code and images\", which\n# is what creates that resources dir. No-op in Debug/simulator: Metro serves\n# worker bundles over HTTP in dev.\n#\n# RN_WORKERS_PACKAGE_ROOT: this example is a yarn workspace consuming the\n# library from source, with no node_modules entry to resolve by name.\nexport RN_WORKERS_PACKAGE_ROOT=\"$SRCROOT/../..\"\n\nWITH_ENVIRONMENT=\"$REACT_NATIVE_PATH/scripts/xcode/with-environment.sh\"\nWORKERS_SCRIPT=\"$RN_WORKERS_PACKAGE_ROOT/scripts/ios-bundle-workers.sh\"\n\n/bin/sh -c \"\\\"$WITH_ENVIRONMENT\\\" \\\"$WORKERS_SCRIPT\\\"\"\n";
 		};
 		C38B50BA6285516D6DCD4F65 /* [CP] Check Pods Manifest.lock */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -404,6 +425,7 @@
 					"-DFOLLY_HAVE_CLOCK_GETTIME=1",
 					"-DRCT_REMOVE_LEGACY_ARCH=1",
 				);
+				PODFILE_DIR = "$(SRCROOT)";
 				REACT_NATIVE_PATH = "${PODS_ROOT}/../../node_modules/react-native";
 				SDKROOT = iphoneos;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) DEBUG";
@@ -478,6 +500,7 @@
 					"-DFOLLY_HAVE_CLOCK_GETTIME=1",
 					"-DRCT_REMOVE_LEGACY_ARCH=1",
 				);
+				PODFILE_DIR = "$(SRCROOT)";
 				REACT_NATIVE_PATH = "${PODS_ROOT}/../../node_modules/react-native";
 				SDKROOT = iphoneos;
 				SWIFT_ENABLE_EXPLICIT_MODULES = NO;
