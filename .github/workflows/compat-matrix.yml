@@ -1,0 +1,234 @@
+name: Compatibility matrix
+
+# Builds a FRESH consumer app against a range of React Native versions and Expo
+# SDKs and compiles the native code, so we find out immediately when a new RN or
+# Expo release breaks the library (API/ABI drift). This tests the packed npm
+# tarball — the truest consumer test.
+#
+# Only MINOR versions are exercised (point releases are skipped): the matrix lists
+# `0.81`, `0.82`, … and each resolves to the latest patch. Floating `latest`/`next`
+# entries pick up brand-new releases automatically, so a breaking drop turns a job
+# red without anyone editing this file.
+#
+# Runs weekly (to catch new releases) and on demand. It is intentionally NOT on the
+# PR hot path — it spins up many full native builds.
+
+on:
+  schedule:
+    - cron: '0 6 * * 1' # every Monday 06:00 UTC
+  workflow_dispatch:
+    inputs:
+      include-ios:
+        description: 'Also run the (slower/costlier) iOS matrix'
+        type: boolean
+        default: true
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Matrix ranges are inlined per job below. Keep them in sync:
+#   RN minors : "0.81".."0.86" (0.81.4 is the floor) + floating "latest"/"next"
+#   Expo SDKs : "54".."57" (SDK 54 is the floor) + floating "latest"
+# The floating entries turn a job red automatically when a breaking version drops.
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Pack the library once (bob build + npm pack) and share the tarball with every
+  # matrix job, so they all install the exact artifact a consumer would.
+  # ---------------------------------------------------------------------------
+  pack:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Setup
+        uses: ./.github/actions/setup
+
+      - name: Build + pack the library
+        run: |
+          yarn prepare
+          npm pack --pack-destination "$RUNNER_TEMP"
+          mv "$RUNNER_TEMP"/*.tgz "$RUNNER_TEMP/react-native-workers.tgz"
+
+      - name: Upload tarball
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: library-tarball
+          path: ${{ runner.temp }}/react-native-workers.tgz
+          retention-days: 3
+
+  # ---------------------------------------------------------------------------
+  # Bare React Native apps — verifies the core worker native code compiles/links
+  # against each RN version. (No Expo here; the Expo bridge is exercised below.)
+  # ---------------------------------------------------------------------------
+  react-native-android:
+    needs: pack
+    runs-on: ubuntu-latest
+    # `next` is a pre-release (RC/nightly) early-warning: a break there flags an
+    # UPCOMING RN release, not a regression, so it warns without failing the run.
+    continue-on-error: ${{ matrix.rn == 'next' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        rn: ['0.81', '0.82', '0.83', '0.84', '0.85', '0.86', 'latest', 'next']
+    name: rn-android (${{ matrix.rn }})
+    steps:
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - name: Install JDK
+        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Download tarball
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: library-tarball
+          path: ${{ runner.temp }}
+
+      - name: Create RN app + install library + build Android
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          RN_VERSION=$(npm view "react-native@${{ matrix.rn }}" version)
+          echo "Resolved react-native@${{ matrix.rn }} -> $RN_VERSION"
+          # New Architecture (required by this library) is the default on RN 0.81+.
+          npx --yes @react-native-community/cli@latest init RnApp \
+            --version "$RN_VERSION" --pm npm --skip-git-init --install-pods false
+          cd RnApp
+          npm install "$RUNNER_TEMP/react-native-workers.tgz"
+          cd android
+          ./gradlew :app:assembleDebug -PreactNativeArchitectures=arm64-v8a --no-daemon --console=plain
+
+  # ---------------------------------------------------------------------------
+  # Expo apps — verifies the Expo-in-worker bridge (companion Swift module on iOS,
+  # the conditional Kotlin `WorkerExpoModules` + fbjni installer on Android)
+  # compiles against each Expo SDK. Pins the SDK via `expo install --fix`.
+  # ---------------------------------------------------------------------------
+  expo-android:
+    needs: pack
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sdk: ['54', '55', '56', '57', 'latest']
+    name: expo-android (sdk ${{ matrix.sdk }})
+    steps:
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - name: Install JDK
+        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Download tarball
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: library-tarball
+          path: ${{ runner.temp }}
+
+      - name: Create Expo app (pinned SDK) + install library + prebuild + build
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          npx --yes create-expo-app@latest ExpoApp --no-install --yes
+          cd ExpoApp
+          # Pin to the target SDK, then let expo align react-native + deps to it.
+          EXPO_RANGE="^${{ matrix.sdk }}.0.0"
+          [ "${{ matrix.sdk }}" = "latest" ] && EXPO_RANGE="latest"
+          npm pkg set "dependencies.expo=$EXPO_RANGE"
+          npm install
+          npx expo install --fix
+          npm install "$RUNNER_TEMP/react-native-workers.tgz"
+          # An Expo module in a worker (compile-only signal for the bridge).
+          npx expo install expo-device expo-crypto
+          npx expo prebuild --platform android --no-install
+          cd android
+          ./gradlew :app:assembleDebug -PreactNativeArchitectures=arm64-v8a --no-daemon --console=plain
+
+  # ---------------------------------------------------------------------------
+  # iOS — leaner (macOS minutes are costly): only the newest RN and the two newest
+  # Expo SDKs. Skipped unless the dispatch input opts in (defaults to on).
+  # ---------------------------------------------------------------------------
+  react-native-ios:
+    needs: pack
+    if: github.event_name == 'schedule' || inputs.include-ios
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        rn: ['0.86', 'latest']
+    name: rn-ios (${{ matrix.rn }})
+    steps:
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - name: Download tarball
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: library-tarball
+          path: ${{ runner.temp }}
+
+      - name: Create RN app + install library + build iOS
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          RN_VERSION=$(npm view "react-native@${{ matrix.rn }}" version)
+          npx --yes @react-native-community/cli@latest init RnApp \
+            --version "$RN_VERSION" --pm npm --skip-git-init --install-pods false
+          cd RnApp
+          npm install "$RUNNER_TEMP/react-native-workers.tgz"
+          cd ios && pod install
+          set -o pipefail && xcodebuild -workspace RnApp.xcworkspace -scheme RnApp \
+            -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            build CODE_SIGNING_ALLOWED=NO | tail -40
+
+  expo-ios:
+    needs: pack
+    if: github.event_name == 'schedule' || inputs.include-ios
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sdk: ['56', '57']
+    name: expo-ios (sdk ${{ matrix.sdk }})
+    steps:
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - name: Download tarball
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: library-tarball
+          path: ${{ runner.temp }}
+
+      - name: Create Expo app (pinned SDK) + install library + prebuild + build
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          npx --yes create-expo-app@latest ExpoApp --no-install --yes
+          cd ExpoApp
+          npm pkg set "dependencies.expo=^${{ matrix.sdk }}.0.0"
+          npm install
+          npx expo install --fix
+          npm install "$RUNNER_TEMP/react-native-workers.tgz"
+          npx expo install expo-device expo-crypto
+          npx expo prebuild --platform ios --no-install
+          cd ios && pod install
+          set -o pipefail && xcodebuild -workspace ExpoApp.xcworkspace -scheme ExpoApp \
+            -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            build CODE_SIGNING_ALLOWED=NO | tail -40
