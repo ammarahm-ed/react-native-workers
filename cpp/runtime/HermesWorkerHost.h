@@ -50,6 +50,10 @@ class HermesWorkerHost : public WorkerRuntimeHost {
   // A CallInvoker bound to this worker's thread (for TurboModules — Phase 3).
   std::shared_ptr<CallInvoker> callInvoker() override;
 
+  std::shared_ptr<WorkerRuntimeLock> runtimeLock() override {
+    return lock_;
+  }
+
   // Run cleanup on the worker thread before the runtime is destroyed (see
   // WorkerRuntimeHost::setPreDestroy).
   void setPreDestroy(std::function<void(jsi::Runtime&)> fn) override {
@@ -99,9 +103,17 @@ class HermesWorkerHost : public WorkerRuntimeHost {
   bool stop_ = false;
   bool immediate_ = false;
 
-  // Worker-thread-only state (no lock needed):
+  // Guarded by mutex_. Timers used to be worker-thread-only, but a host function
+  // calling setTimeout now runs on whichever thread entered JS (see
+  // WorkerJsLock.h), while the event loop reads deadlines under mutex_ to size
+  // its wait — so both sides need the same lock.
   std::vector<Timer> timers_;
   uint32_t nextTimerId_ = 1;
+
+  // Created eagerly (before the runtime exists) so callers can hold it from any
+  // thread at any point in the worker's lifetime.
+  std::shared_ptr<WorkerRuntimeLock> lock_ =
+      std::make_shared<WorkerRuntimeLock>();
 
   std::shared_ptr<InvokerShared> invokerShared_;
 

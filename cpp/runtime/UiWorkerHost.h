@@ -35,6 +35,9 @@ class UiWorkerHost : public WorkerRuntimeHost {
       InstallFn install) override;
   void post(Task&& task) override;
   std::shared_ptr<CallInvoker> callInvoker() override;
+  std::shared_ptr<WorkerRuntimeLock> runtimeLock() override {
+    return lock_;
+  }
   void setPreDestroy(std::function<void(jsi::Runtime&)> fn) override {
     // Install runs on the main thread, where state_ is exclusively touched.
     state_->preDestroy = std::move(fn);
@@ -52,8 +55,11 @@ class UiWorkerHost : public WorkerRuntimeHost {
     std::shared_ptr<std::atomic<bool>> alive;
   };
 
-  // Everything the runtime touches lives here; mutated only on the main thread.
+  // Everything the runtime touches lives here. Historically main-thread-only;
+  // with the experimental `Thread` API a task can run this runtime on another
+  // thread, so every access goes through `lock` (see WorkerJsLock.h).
   struct State {
+    std::shared_ptr<WorkerRuntimeLock> lock;
     std::unique_ptr<jsi::Runtime> runtime;
     std::atomic<bool> stopped{false};
     std::unordered_map<uint32_t, std::shared_ptr<TimerState>> timers;
@@ -79,6 +85,11 @@ class UiWorkerHost : public WorkerRuntimeHost {
   std::string name_;
   std::shared_ptr<MainThreadScheduler> scheduler_;
   bool inspectable_;
+  // Created eagerly (before the runtime exists) so it can be handed to any
+  // thread at any point in this worker's lifetime. Also stored in State so the
+  // main-thread lambdas reach it without capturing `this`.
+  std::shared_ptr<WorkerRuntimeLock> lock_ =
+      std::make_shared<WorkerRuntimeLock>();
   std::shared_ptr<State> state_;
 };
 

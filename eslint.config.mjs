@@ -3,6 +3,7 @@ import { FlatCompat } from '@eslint/eslintrc';
 import js from '@eslint/js';
 import prettier from 'eslint-plugin-prettier';
 import { defineConfig } from 'eslint/config';
+import globals from 'globals';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -33,6 +34,21 @@ export default defineConfig([
     },
   },
   {
-    ignores: ['node_modules/', 'lib/'],
+    // Node-side tooling: the CLI, the Expo config plugin, build scripts and
+    // config files run under Node, not Metro, so they get the Node globals.
+    files: [
+      'cli/**/*.js',
+      'scripts/**/*.{js,mjs}',
+      'metro/**/*.js',
+      'app.plugin.js',
+      '*.config.js',
+      'react-native.config.js',
+    ],
+    languageOptions: {
+      globals: globals.node,
+    },
+  },
+  {
+    ignores: ['node_modules/', 'lib/', 'docs/'],
   },
 ]);

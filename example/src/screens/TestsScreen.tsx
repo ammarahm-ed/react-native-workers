@@ -734,6 +734,95 @@ export default function TestsScreen() {
         // Full behavior/conformance suite.
         const conf = await runConformance();
         all.push(...conf);
+
+        // EXPERIMENTAL `Thread` API stress suite: runs this worker's runtime on
+        // other threads under heavy contention. Generous timeout — the hammer
+        // case alone is 8 threads x 150 calls.
+        const threads = await new Promise<any>((resolve) => {
+          try {
+            const w = new Worker('../workers/threads');
+            let lastStep = '(none)';
+            const timer = setTimeout(() => {
+              w.terminate();
+              resolve({ __timeout: true, lastStep });
+            }, 30000);
+            w.onmessage = (e: any) => {
+              if (e.data && e.data.__step) {
+                lastStep = e.data.__step;
+                return;
+              }
+              clearTimeout(timer);
+              w.terminate();
+              resolve(e.data);
+            };
+            w.onerror = (e: any) => {
+              clearTimeout(timer);
+              w.terminate();
+              resolve({
+                __error: e.message,
+                at: `${e.filename}:${e.lineno}:${e.colno}`,
+              });
+            };
+            w.postMessage('go');
+          } catch (err) {
+            resolve({ __threw: String((err as any)?.message ?? err) });
+          }
+        });
+        if (threads?.results?.length) {
+          all.push(
+            ...threads.results.map((r: any) => ({
+              name: `threads: ${r.n}`,
+              pass: !!r.p,
+              detail: r.d ?? '',
+            }))
+          );
+        }
+        if (threads?.__error || threads?.__timeout || threads?.__threw) {
+          all.push({
+            name: 'threads: suite completed',
+            pass: false,
+            detail: JSON.stringify(threads),
+          });
+        }
+
+        // Terminate under load: hammer a worker's runtime from several threads
+        // and kill it mid-flight. Teardown must unpublish the runtime and let
+        // parked foreign threads unwind — never crash the process.
+        const threadTeardown = await new Promise<any>((resolve) => {
+          try {
+            const w = new Worker({
+              inline: `
+                self.onmessage = () => {
+                  enableMultiThreadingExperimental();
+                  var ts = [0,1,2,3].map(function (i) { return Thread.create('kill-' + i); });
+                  var n = 0;
+                  for (var r = 0; r < 500; r++) {
+                    ts.forEach(function (t) {
+                      t.run(function () { n++; return n; }).catch(function () {});
+                    });
+                  }
+                  self.postMessage({ queued: true });
+                };
+              `,
+            });
+            w.onmessage = () => {
+              // Kill while hundreds of cross-thread calls are still in flight.
+              setTimeout(() => {
+                w.terminate();
+                setTimeout(() => resolve({ ok: true }), 400);
+              }, 20);
+            };
+            w.onerror = (e: any) => resolve({ __error: e.message });
+            w.postMessage('go');
+          } catch (err) {
+            resolve({ __threw: String((err as any)?.message ?? err) });
+          }
+        });
+        all.push({
+          name: 'threads: terminate under load',
+          pass: threadTeardown?.ok === true,
+          detail: JSON.stringify(threadTeardown),
+        });
       } catch (err) {
         all.push({
           name: 'harness-error',
@@ -747,16 +836,21 @@ export default function TestsScreen() {
       markReady('tests', 'data');
       // Emit a machine-readable summary for CI / logcat verification.
       const passedCount = all.filter((r) => r.pass).length;
-      console.log(
+      const summary =
         `[RNWORKERS-RESULTS] ${passedCount}/${all.length} ` +
-          JSON.stringify(
-            all.map((r) => ({
-              n: r.name,
-              p: r.pass,
-              d: r.pass ? undefined : r.detail,
-            }))
-          )
-      );
+        JSON.stringify(
+          all.map((r) => ({
+            n: r.name,
+            p: r.pass,
+            d: r.pass ? undefined : r.detail,
+          }))
+        );
+      // Through nativeLoggingHook like markReady(): in bridgeless dev builds
+      // console.log goes to the DevTools channel and never reaches the platform
+      // log, which is where CI and `simctl launch --console-pty` read from.
+      const hook = (globalThis as any).nativeLoggingHook;
+      if (typeof hook === 'function') hook(summary, 3);
+      console.log(summary);
     })();
   }, []);
 

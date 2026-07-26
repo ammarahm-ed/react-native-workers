@@ -73,6 +73,48 @@ instantly. Modules the worker registered are re-announced to the reconnecting
 handle, so [`ready()`](../rpc/jsmodule-bridge) resolves without the script
 running again.
 
+### One UI runtime, many connections
+
+Sharing is keyed by source URL across the whole app — including from *inside*
+other workers. Several background workers can each `new UIWorker('./ui-work')`
+and all end up talking to the **same** main-thread runtime and the same module
+registry, without any of them re-evaluating the script:
+
+```mermaid
+flowchart LR
+  subgraph host["Host runtime — RN JS thread"]
+    S["Screen<br/>new UIWorker('./ui-work')"]
+  end
+
+  subgraph bgA["Worker A — own thread"]
+    A["new UIWorker('./ui-work')"]
+  end
+
+  subgraph bgB["Worker B — own thread"]
+    B["new UIWorker('./ui-work')"]
+  end
+
+  subgraph mainT["Main / UI thread"]
+    UI["UIWorker runtime<br/>./ui-work<br/><i>evaluated once, lives for the process</i>"]
+    REG["Module registry<br/>+ native registrations"]
+    UI --- REG
+  end
+
+  S -- "conn 1" --> UI
+  A -- "conn 2" --> UI
+  B -- "conn 3" --> UI
+```
+
+Each arrow is a **connection**, not a runtime. The first one evaluates
+`./ui-work`; the rest attach to it and get the registered modules re-announced.
+`terminate()` on any handle drops only that connection — the runtime and the
+other connections carry on.
+
+This is what makes a `UIWorker` usable as a shared main-thread service: a pool of
+background workers doing compute, all routing their UI-affine calls through one
+runtime that owns the main-thread state. Pass `{ independent: true }` to opt out
+and get a private runtime per call instead.
+
 ### `terminate()` vs `terminateRuntime()`
 
 | Call | Shared `UIWorker` (default) | `independent` `UIWorker` / `Worker` |

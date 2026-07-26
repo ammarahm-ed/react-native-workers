@@ -19,6 +19,7 @@ export type {
   ModuleHandle,
   BridgeEndpoint,
 } from './bridge';
+export type { WorkerThread, ThreadApi } from './threads';
 export { __workerRef } from './resolveWorkerSource';
 export type { WorkerOptions } from './Worker';
 export type { WorkerSourceInput, WorkerRef } from './resolveWorkerSource';

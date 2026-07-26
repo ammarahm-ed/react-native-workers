@@ -824,6 +824,104 @@ constexpr const char* kWorkerPrelude = R"JS(
     };
   })();
 })();
+
+// EXPERIMENTAL: `Thread` — run THIS worker's JS on another thread.
+//
+// There is no second runtime and no serialization: `fn` is a plain closure that
+// keeps every binding it captured. What moves is which OS thread executes the
+// runtime, guarded by a lock so only one thread is ever inside it (see
+// cpp/runtime/WorkerJsLock.h).
+//
+// Gated on purpose. Until enableMultiThreadingExperimental() is called, every
+// entry point throws rather than half-working.
+(function () {
+  var g = globalThis;
+  var enabled = false;
+
+  function ensureEnabled() {
+    if (!enabled) {
+      throw new Error(
+        'Multi-threading is experimental and disabled. Call ' +
+          'global.enableMultiThreadingExperimental() in this worker first.'
+      );
+    }
+  }
+
+  function WorkerThread(id, name) {
+    this._id = id;
+    this._disposed = false;
+    this.name = name;
+  }
+
+  // Resolves on THIS worker's own thread, never on the target's — so code after
+  // an `await` always continues where it started. Thread changes only ever
+  // happen inside a run() callback.
+  WorkerThread.prototype.run = function (fn) {
+    ensureEnabled();
+    if (typeof fn !== 'function') {
+      throw new TypeError('Thread.run expects a function');
+    }
+    if (this._disposed) {
+      throw new Error('Thread "' + this.name + '" has been disposed');
+    }
+    var id = this._id;
+    return new Promise(function (resolve, reject) {
+      g.__workerThreadRun(id, fn, function (message, stack, value) {
+        if (message === null || message === undefined) {
+          resolve(value);
+          return;
+        }
+        var error = new Error(message);
+        if (stack) error.stack = stack;
+        reject(error);
+      });
+    });
+  };
+
+  WorkerThread.prototype.dispose = function () {
+    if (this._disposed) return false;
+    this._disposed = true;
+    return g.__workerThreadDispose(this._id);
+  };
+
+  Object.defineProperty(WorkerThread.prototype, 'disposed', {
+    get: function () {
+      return this._disposed;
+    }
+  });
+
+  var mainThread = null;
+
+  g.Thread = {
+    // The platform main/UI thread. Throws where UIWorker is also unavailable.
+    get main() {
+      ensureEnabled();
+      if (!mainThread) mainThread = new WorkerThread(g.__workerThreadMain(), 'main');
+      return mainThread;
+    },
+    // A fresh serial background thread. Tasks on it run one at a time, in order.
+    create: function (name) {
+      ensureEnabled();
+      var threadName = typeof name === 'string' && name ? name : 'worker-thread';
+      return new WorkerThread(g.__workerThreadCreate(threadName), threadName);
+    },
+    // Name of the thread currently executing, or '' on the worker's own thread.
+    get current() {
+      return g.__workerThreadCurrent();
+    }
+  };
+
+  g.enableMultiThreadingExperimental = function () {
+    if (typeof g.__workerThreadsEnable !== 'function') {
+      throw new Error(
+        'Multi-threading is not supported by this build of react-native-workers.'
+      );
+    }
+    enabled = true;
+    g.__workerThreadsEnable();
+    return true;
+  };
+})();
 )JS";
 
 } // namespace facebook::react::workers

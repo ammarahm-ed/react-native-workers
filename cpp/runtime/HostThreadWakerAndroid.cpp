@@ -11,6 +11,7 @@
 
 #include <android/log.h>
 #include <android/looper.h>
+#include <fbjni/fbjni.h>
 #include <sys/eventfd.h>
 #include <unistd.h>
 
@@ -121,6 +122,28 @@ class AndroidHostThreadWaker : public HostThreadWaker {
     }
     if (batch.empty()) return;
 
+    // Run the batch under the app class loader.
+    //
+    // We reach here from ALooper's poll callback inside
+    // MessageQueue.nativePollOnce, so although the host JS thread IS a Java
+    // thread, there is no app Java frame on the stack — a JNI FindClass
+    // performed by the JS we are about to run (any TurboModule call that
+    // resolves an app class) would use the boot class loader and fail with
+    // NoClassDefFoundError. ART then aborts the process at the next JNI call.
+    // Bypassing the JVM for the wakeup is the whole point of this class, but
+    // the JS it triggers still needs a class loader. Same fix, same reason, as
+    // MainThreadSchedulerAndroid::runTask.
+    try {
+      facebook::jni::ThreadScope::WithClassLoader([&]() { runBatch(batch); });
+    } catch (const std::exception& e) {
+      // No JVM / no class loader available: still run the work rather than drop
+      // it. JS that touches no app class is unaffected.
+      RNWW_LOG("WithClassLoader failed (%s); running without it", e.what());
+      runBatch(batch);
+    }
+  }
+
+  void runBatch(std::vector<std::function<void(jsi::Runtime&)>>& batch) {
     for (auto& task : batch) {
       try {
         task(*runtime_);

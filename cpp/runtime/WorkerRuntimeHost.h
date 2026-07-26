@@ -8,6 +8,8 @@
 #include <memory>
 #include <string>
 
+#include "WorkerJsLock.h"
+
 namespace facebook::react::workers {
 
 // Abstract host that owns a worker's Hermes runtime and drives its event loop.
@@ -27,6 +29,10 @@ class WorkerRuntimeHost {
       InstallFn install) = 0;
   virtual void post(Task&& task) = 0;
   virtual std::shared_ptr<CallInvoker> callInvoker() = 0;
+  // The lock every entry into this worker's runtime must be taken under. Valid
+  // from construction (before the runtime exists), so it is safe to hand to
+  // another thread at any time — see WorkerJsLock.h.
+  virtual std::shared_ptr<WorkerRuntimeLock> runtimeLock() = 0;
   // Register a callback run ON the worker thread with the runtime STILL ALIVE,
   // just before the runtime is destroyed. Used to tear down a per-worker platform
   // TurboModule manager (invalidate its modules) while its jsi references are

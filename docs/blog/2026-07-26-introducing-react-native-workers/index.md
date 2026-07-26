@@ -321,6 +321,56 @@ methods from the worker, emit events **both** ways, and share reactive `state` �
 typed end to end, with a `dispose()` to tear it down. The
 [defineModule guide](/docs/rpc/define-module) has the full shape.
 
+## Running a worker's JS on *another* thread (experimental)
+
+Everything above moves *data* between runtimes. The newest piece moves the
+**thread** instead.
+
+A worker's runtime is normally pinned to its own thread. The experimental
+`Thread` API lets that same runtime temporarily execute somewhere else — the
+main/UI thread, or a background thread you create:
+
+```js
+enableMultiThreadingExperimental();
+
+const codec = Thread.create('codec');
+
+await codec.run(() => {
+  const pixels = decodeFrame(bytes);   // on the 'codec' thread
+  const summary = analyze(pixels);
+
+  Thread.main.run(() => {
+    applyToNativeView(summary);        // on the main thread
+  });
+});
+```
+
+The important part is what *isn't* happening: there's no second runtime and
+nothing is serialized. The callback is a plain closure that keeps every binding
+it captured — same variables, same objects, same identity. Only the OS thread
+executing the runtime changes.
+
+```js
+let progress = 0;
+await codec.run(() => { progress = 50; }); // same variable, no message passing
+console.log(progress);                     // 50
+```
+
+That works because every entry into a worker's runtime — its event loop, timers,
+native module callbacks, the debugger, and `Thread.run` — now goes through a
+per-worker lock, so exactly one thread is ever inside the runtime. It is **thread
+affinity, not parallelism**: a `run()` body is atomic, and a slow one blocks the
+worker (or janks the UI, if it's on `Thread.main`).
+
+Promises settle back on the worker's *own* thread, so `await` always returns you
+where you started and thread changes only ever happen inside a `run()` callback —
+the single-threaded mental model survives.
+
+It's off by default and gated per worker behind
+`enableMultiThreadingExperimental()`. The [Thread hopping
+guide](/docs/guides/threads) covers the rules before you ship it — and when a
+plain `Worker` or a [`UIWorker`](/docs/guides/ui-worker) is the better tool.
+
 ## Messaging, cloning, and nesting
 
 Data crosses the boundary via **structured clone** — objects, arrays, `Date`, typed
@@ -386,6 +436,9 @@ want it to be — but this is a `1.0.0-alpha`, so:
   work everywhere**, dev and release, so you're never blocked — see
   [Bundling for release](/docs/guides/bundling).
 - **Structured clone** doesn't yet copy `Map`, `Set`, `RegExp`, `Error`, or `BigInt`.
+- **`Thread` is experimental**, off unless you call
+  `enableMultiThreadingExperimental()`, and its shape may change. There is no
+  synchronous `runSync` on purpose — see [the rules](/docs/guides/threads#the-rules).
 - The API may still shift before `1.0.0`.
 
 If you hit an edge, that's exactly the feedback this release is for.

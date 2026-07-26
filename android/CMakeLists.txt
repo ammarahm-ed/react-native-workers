@@ -31,7 +31,9 @@ add_library(
     ../cpp/runtime/HostThreadWakerAndroid.cpp
     ../cpp/runtime/MainThreadScheduler.cpp
     ../cpp/runtime/MainThreadSchedulerAndroid.cpp
+    ../cpp/runtime/ThreadTarget.cpp
     ../cpp/runtime/UiWorkerHost.cpp
+    ../cpp/runtime/WorkerJsLock.cpp
     ../cpp/runtime/WorkerAssetReader.cpp
     ../cpp/runtime/WorkerAssetReaderAndroid.cpp
     ../cpp/runtime/WorkerInspector.cpp
@@ -40,6 +42,7 @@ add_library(
     ../cpp/bindings/WorkerExpoModules.cpp
     ../cpp/bindings/WorkerExpoModulesAndroid.cpp
     ../cpp/bindings/WorkerGlobalScope.cpp
+    ../cpp/bindings/WorkerThreads.cpp
     ../cpp/bindings/WorkerTurboModules.cpp
     ../cpp/bindings/WorkerTurboModulesAndroid.cpp
     ../cpp/api/NativeWorkers.cpp

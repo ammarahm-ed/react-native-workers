@@ -61,6 +61,7 @@ UiWorkerHost::UiWorkerHost(
       state_(std::make_shared<State>()) {
   state_->maxHeapMb = maxHeapMb ? maxHeapMb : 256;
   state_->scheduler = scheduler_;
+  state_->lock = lock_;
 }
 
 UiWorkerHost::~UiWorkerHost() {
@@ -70,18 +71,30 @@ UiWorkerHost::~UiWorkerHost() {
   state->stopped.store(true);
   if (scheduler_) {
     scheduler_->post([state]() {
-      // Drop the debugger target first: this closes any live session, so no CDP
-      // command can be dispatched against a runtime we are about to destroy.
-      state->inspectorTarget.reset();
-      // Tear down native resources while the runtime is still alive.
-      if (state->preDestroy && state->runtime) {
-        try {
-          state->preDestroy(*state->runtime);
-        } catch (...) {
+      // One scope over the whole teardown: each step releases jsi values, and no
+      // foreign thread may enter between the debugger target going away and the
+      // runtime being destroyed.
+      {
+        WorkerJsScope scope(state->lock);
+        // Drop the debugger target first: this closes any live session, so no
+        // CDP command can be dispatched against a runtime we are about to
+        // destroy.
+        state->inspectorTarget.reset();
+        // Tear down native resources while the runtime is still alive. This is
+        // also where ThreadTargets are disposed — under this scope, as their
+        // destructor contract requires.
+        if (state->preDestroy && state->runtime) {
+          try {
+            state->preDestroy(*state->runtime);
+          } catch (...) {
+          }
+          state->preDestroy = nullptr;
         }
-        state->preDestroy = nullptr;
+        state->timers.clear();
+        // Unpublish while still holding the lock: anyone blocked on it wakes to
+        // find no runtime and returns without touching it.
+        state->lock->runtime = nullptr;
       }
-      state->timers.clear();
       state->runtime.reset();
     });
   }
@@ -115,6 +128,13 @@ void UiWorkerHost::start(
     state->runtime = std::move(hermesRuntime);
     Runtime& rt = *state->runtime;
 
+    // Publish to the lock before anything can enter. Cleared again in the
+    // teardown task above, under the same lock.
+    {
+      std::lock_guard<std::recursive_mutex> guard(state->lock->mutex);
+      state->lock->runtime = &rt;
+    }
+
     // Opt-in debugger target. Registered BEFORE user code so early breakpoints
     // are honoured. WARNING: this runtime is on the platform main thread, so a
     // debugger pause holds the UI thread — the app freezes until you resume, and
@@ -135,30 +155,36 @@ void UiWorkerHost::start(
       }
     }
 
+    // One scope around the whole startup sequence: no foreign thread may enter
+    // while bindings are installing or the bundle is mid-evaluation.
+    WorkerJsScope scope(state->lock);
     try {
       install(rt);
       rt.evaluateJavaScript(
           std::make_shared<const StringBuffer>(prelude),
           "rnworkers-prelude.js");
-      rt.drainMicrotasks();
     } catch (...) {
+      // Unpublish before bailing, or a queued cross-thread entry would find a
+      // runtime that is about to be torn down without ever having started.
+      state->lock->runtime = nullptr;
       return;
     }
     runGuarded(rt, [&] {
       rt.evaluateJavaScript(
           std::make_shared<const StringBuffer>(code), sourceUrl);
     });
-    rt.drainMicrotasks();
   });
 }
 
 void UiWorkerHost::post(Task&& task) {
   auto state = state_;
-  scheduler_->post([state, task = std::move(task)]() {
-    if (state->runtime && !state->stopped.load()) {
-      runGuarded(*state->runtime, [&] { task(*state->runtime); });
-      state->runtime->drainMicrotasks();
+  scheduler_->post([state, task = std::move(task)]() mutable {
+    WorkerJsScope scope(state->lock);
+    if (scope.alive() && !state->stopped.load()) {
+      runGuarded(scope.runtime(), [&] { task(scope.runtime()); });
     }
+    // Drop the closure's jsi refs while the scope is open.
+    task = nullptr;
   });
 }
 
@@ -172,10 +198,11 @@ std::shared_ptr<CallInvoker> UiWorkerHost::callInvoker() {
     void invokeAsync(CallFunc&& func) noexcept override {
       auto s = state;
       sched->post([s, func = std::move(func)]() mutable {
-        if (s->runtime && !s->stopped.load()) {
-          func(*s->runtime);
-          s->runtime->drainMicrotasks();
+        WorkerJsScope scope(s->lock);
+        if (scope.alive() && !s->stopped.load()) {
+          func(scope.runtime());
         }
+        func = nullptr;
       });
     }
     void invokeSync(CallFunc&&) override {
@@ -198,11 +225,14 @@ void UiWorkerHost::scheduleTimer(
   auto* scheduler = state->scheduler.get();
   scheduler->postDelayed(
       [state, id, ts]() {
-        if (!ts->alive->load() || !state->runtime || state->stopped.load()) {
+        // The scope covers `state->timers` too: addTimer/clearTimer now run on
+        // whichever thread entered JS, so the timer map is only consistent while
+        // the runtime lock is held.
+        WorkerJsScope scope(state->lock);
+        if (!ts->alive->load() || !scope.alive() || state->stopped.load()) {
           return;
         }
-        runGuarded(*state->runtime, [&] { ts->cb->call(*state->runtime); });
-        state->runtime->drainMicrotasks();
+        runGuarded(scope.runtime(), [&] { ts->cb->call(scope.runtime()); });
         if (ts->repeat && ts->alive->load() && !state->stopped.load()) {
           scheduleTimer(state, id, ts);
         } else {

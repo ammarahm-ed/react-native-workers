@@ -3,6 +3,7 @@
 #include "../bindings/WorkerExpoModules.h"
 #include "../bindings/WorkerGlobalScope.h"
 #include "../bindings/WorkerPrelude.h"
+#include "../bindings/WorkerThreads.h"
 #include "../bindings/WorkerTurboModules.h"
 #include "../runtime/HermesWorkerHost.h"
 #include "../runtime/MainThreadScheduler.h"
@@ -166,6 +167,17 @@ void Worker::start(std::string code, std::string sourceUrl) {
             });
         // SharedBuffer: raw shared memory + named locks (no callbacks/cleanup).
         installSharedBuffer(rt);
+        // Experimental `Thread` API: run THIS runtime on another thread. Gated
+        // behind enableMultiThreadingExperimental() in JS. Promise settlement
+        // goes back through the worker's own CallInvoker (same inert-on-teardown
+        // contract as SharedStore/SharedValue above), which is what keeps an
+        // `await` from resuming user code on a foreign thread.
+        auto threadsCleanup = installWorkerThreads(
+            rt,
+            host->runtimeLock(),
+            [workerInvoker](std::function<void(Runtime&)> fn) {
+              workerInvoker->invokeAsync(std::move(fn));
+            });
         // Run the teardowns on the worker thread with the runtime still alive,
         // right before it is destroyed: drop this worker's store/value
         // subscriptions (so no stale callback lingers), then invalidate the
@@ -173,7 +185,11 @@ void Worker::start(std::string code, std::string sourceUrl) {
         host->setPreDestroy([storeCleanup = std::move(storeCleanup),
                              valueCleanup = std::move(valueCleanup),
                              tmCleanup = std::move(tmCleanup),
+                             threadsCleanup = std::move(threadsCleanup),
                              expoCleanup = std::move(expoCleanup)](Runtime& rt) {
+          // Threads first: stop foreign threads from entering this runtime
+          // before anything else is torn down under them.
+          if (threadsCleanup) threadsCleanup();
           if (storeCleanup) storeCleanup(rt);
           if (valueCleanup) valueCleanup(rt);
           // Release the per-worker Expo AppContext (Android) before the TurboModule
