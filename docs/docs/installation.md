@@ -13,7 +13,7 @@ npm install @ammarahmed/react-native-workers
 ```
 
 The library ships native C++/Kotlin/Objective-C, so it's autolinked — no manual
-linking. You must be on the **New Architecture** with **Hermes** (RN 0.76+).
+linking. You must be on the **New Architecture** with **Hermes** (RN 0.81.4+).
 
 ### iOS
 
@@ -124,6 +124,113 @@ RN's **core** modules (`SourceCode`, `PlatformConstants`, `DeviceInfo`, …) are
 added automatically. See [Native modules in workers](./guides/native-modules) for
 details. On **iOS no setup is required** — a per-worker `RCTTurboModuleManager`
 resolves any registered ObjC module via the global registry.
+
+## Expo
+
+The library works in an Expo app that uses a **development build** (custom native
+code, so **not** Expo Go) with the New Architecture — the default on SDK 52+.
+`expo prebuild` runs `pod install` and Gradle autolinking, and all iOS native
+registration happens from `+load`, so **iOS needs no project edits at all**.
+
+Steps 2 (Metro) and 3 (Babel) are the same, adapted to Expo's presets:
+
+```js title="metro.config.js"
+const { getDefaultConfig } = require('expo/metro-config');
+const { withWorkers } = require('@ammarahmed/react-native-workers/metro');
+
+module.exports = withWorkers(getDefaultConfig(__dirname));
+```
+
+```js title="babel.config.js"
+module.exports = function (api) {
+  api.cache(true);
+  return {
+    presets: ['babel-preset-expo'],
+    plugins: [require.resolve('@ammarahmed/react-native-workers/plugin')],
+  };
+};
+```
+
+The Android `MainApplication` registration (step 4) and the release worker-bundling
+wiring can't be hand-edited in a managed/prebuild app, so the library ships an
+**Expo config plugin** that does them at prebuild time. Add it to `app.json`:
+
+```json title="app.json"
+{
+  "expo": {
+    "plugins": [
+      ["@ammarahmed/react-native-workers", {
+        "androidNativeModules": true,
+        "releaseBundling": false
+      }]
+    ]
+  }
+}
+```
+
+- **`androidNativeModules`** (default `true`) — injects the one-time
+  `WorkerTurboModules.initialize(...)` call into the generated `MainApplication`, so
+  `new Worker(src, { nativeModules: true })` can reach your app's Java/Kotlin modules.
+  Harmless when unused; set `false` to skip it.
+- **`releaseBundling`** (default `false`) — wires the ahead-of-time worker-bundle
+  build into the Android Gradle build and the iOS Xcode build phase. Enable it if you
+  use **file-based workers** (`new Worker('./file')`) and ship release builds.
+
+Then:
+
+```bash
+npx expo prebuild --clean
+npx expo run:ios     # or: npx expo run:android
+```
+
+A runnable reference lives in [`expo-example/`](https://github.com/ammarahm-ed/ammarahmed-react-native-workers/tree/main/expo-example).
+
+### Expo modules inside a worker
+
+Standard **TurboModules / NativeModules** work inside a worker, and so does the
+**Expo Modules API** — `requireNativeModule(...)` works directly inside a worker on
+**both iOS and Android** when the worker opts into native modules:
+
+```js
+const w = new Worker('./worker', { nativeModules: true });
+// inside the worker:
+const Device = requireNativeModule('ExpoDevice');
+Device.osName;                        // constants — read synchronously
+await Device.getDeviceTypeAsync();    // async functions — invoked natively
+const Crypto = requireNativeModule('ExpoCrypto');
+Crypto.randomUUID();                  // sync functions — return a value directly
+
+const Foo = requireNativeModule('SomeModule');
+Foo.someProperty;                     // dynamic properties — read live
+const sub = Foo.addListener('onEvent', (payload) => { /* ... */ }); // events
+sub.remove();
+```
+
+The full module surface works: **constants**, **sync + async functions**, **live
+properties**, and module-emitted **events**. Nothing crosses runtimes, so it's
+crash-safe. The library uses a different strategy per platform:
+
+- **iOS** — Expo's `AppContext` is bound to the app's main runtime and the
+  Swift↔C++ boundary prevents binding a second one to a worker. So the library
+  installs its **own** `global.expo.modules` host object in the worker runtime that
+  forwards every call natively through Expo's public `AppContext` API. Events and
+  live properties are bridged from the main runtime on the main thread and delivered
+  back on the worker thread. The app's `AppContext` is captured automatically by a
+  companion Expo module the library ships — no app wiring.
+- **Android** — Expo's JNI install takes a raw runtime pointer, so the library builds
+  a real, **per-worker `AppContext`** and lets Expo install `global.expo` against the
+  worker runtime directly. Every feature runs through Expo's own native
+  implementation, with per-worker module instances (like this library's per-worker
+  TurboModules).
+
+This compiles to nothing in non-Expo apps.
+
+:::note[Per-worker module instances on Android]
+On Android each worker re-instantiates the app's Expo modules (its own `AppContext`).
+This is ideal for request/response modules (device, crypto, constants, file-system…).
+A module that keeps process-wide native state or registers global system listeners in
+its `OnCreate` may do so once per worker — prefer calling those on the main runtime.
+:::
 
 ## Verify
 

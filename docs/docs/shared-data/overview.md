@@ -67,13 +67,13 @@ anything is subscribed).
 
 ## Performance at a glance
 
-Pixel 5 emulator, debug build — release is faster:
+Pixel 5 emulator, release build, median of 4 runs:
 
-- `SharedValue`: ~0.11 µs/op → **~8M writes/sec**, lock-free for numbers.
-  ~3× faster than `SharedStore` for a single value.
-- `SharedBuffer`: filling + summing a 50k `Float64Array` is **~6–10× faster** than
+- `SharedValue`: ~0.06 µs/op → **~17M writes/sec**, lock-free for numbers.
+  ~2× faster than `SharedStore` for a single value.
+- `SharedBuffer`: filling + summing a 50k `Float64Array` is **~4× faster** than
   the same data through `SharedStore` (no per-element boundary crossing).
-- `SharedStore` granular `setIn`: **~4× faster** than re-sending a whole object
+- `SharedStore` granular `setIn`: **~12× faster** than re-sending a whole object
   over `postMessage`.
 
 See [Performance](../performance) for the full picture.

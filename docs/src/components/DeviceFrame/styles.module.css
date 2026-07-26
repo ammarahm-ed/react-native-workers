@@ -1,0 +1,63 @@
+/**
+ * Device framing for example-app captures. Colors come from the site palette in
+ * `src/css/custom.css` (--deepdark / --dark / --brand / --subtle), so the frame
+ * reads as part of the site in both color modes.
+ */
+
+.figure {
+  margin: 1.75rem auto;
+  max-width: 100%;
+}
+
+.bezel {
+  padding: 8px;
+  border-radius: 28px;
+  background: linear-gradient(160deg, var(--dark) 0%, var(--deepdark) 100%);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.08) inset,
+    0 18px 38px rgba(0, 0, 0, 0.18),
+    0 2px 6px rgba(0, 0, 0, 0.12);
+}
+
+[data-theme='dark'] .bezel {
+  box-shadow:
+    0 0 0 1px rgba(97, 218, 251, 0.18),
+    0 1px 0 rgba(255, 255, 255, 0.06) inset,
+    0 20px 44px rgba(0, 0, 0, 0.55);
+}
+
+.screen {
+  overflow: hidden;
+  border-radius: 21px;
+  background: #fff;
+  /* The captures are of a light-mode app; keep the screen white in both themes
+     rather than letting a dark page show through a transparent edge. */
+  line-height: 0;
+}
+
+.media {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.caption {
+  margin-top: 0.7rem;
+  color: var(--subtle);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  text-align: center;
+}
+
+.showcase {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+  align-items: flex-start;
+  justify-content: center;
+  margin: 1.5rem 0;
+}
+
+.showcase .figure {
+  margin: 0;
+}

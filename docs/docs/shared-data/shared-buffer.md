@@ -25,7 +25,7 @@ boundary (one host call). With a `SharedBuffer` you pay **one** host call to get
 `ArrayBuffer`, then all reads/writes are **plain JavaScript** on a typed array — no
 per-element boundary crossing at all.
 
-Filling and summing a 50,000-element `Float64Array` is **~6–10× faster** than the
+Filling and summing a 50,000-element `Float64Array` is **~4× faster** than the
 same data through `SharedStore`. This is the case that beats per-cell primitives —
 ours *and* comparable ones like worklet shared values — because bulk math stays in
 one runtime over shared memory.

@@ -91,7 +91,26 @@ const config: Config = {
           sidebarPath: './sidebars.ts',
           editUrl: `${GITHUB_URL}/tree/main/docs/`,
         },
-        blog: false,
+        blog: {
+          showReadingTime: true,
+          blogTitle: 'Blog',
+          blogDescription:
+            'Release announcements and deep dives on react-native-workers.',
+          blogSidebarTitle: 'All posts',
+          blogSidebarCount: 'ALL',
+          postsPerPage: 10,
+          editUrl: `${GITHUB_URL}/tree/main/docs/`,
+          feedOptions: {
+            type: ['rss', 'atom'],
+            title: 'react-native-workers blog',
+            description:
+              'Release announcements and deep dives on react-native-workers.',
+            copyright: `Copyright © ${new Date().getFullYear()} react-native-workers.`,
+          },
+          // Keep builds resilient regardless of how a post declares authors/excerpts.
+          onInlineAuthors: 'ignore',
+          onUntruncatedBlogPosts: 'ignore',
+        },
         theme: {
           customCss: './src/css/custom.css',
         },
@@ -116,6 +135,11 @@ const config: Config = {
           sidebarId: 'docsSidebar',
           position: 'left',
           label: 'Docs',
+        },
+        {
+          to: '/blog',
+          label: 'Blog',
+          position: 'left',
         },
         {
           href: 'https://www.npmjs.com/package/@ammarahmed/react-native-workers',

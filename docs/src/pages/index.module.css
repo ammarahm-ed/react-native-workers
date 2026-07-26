@@ -38,3 +38,267 @@
   margin: 2.5rem auto 0;
   text-align: left;
 }
+
+/* ---------------------------------------------------------------------------
+ * Animated "runtime system" hero background.
+ *   core         → the app's MAIN JS runtime (UI thread) — the glowing "sun"
+ *   worker       → a worker runtime orbiting on its own thread
+ *   packet       → postMessage traffic sliding along a rotating spoke (out + reply)
+ * Cyan-on-dark, on-brand. GPU-cheap — only transform + opacity animate. The static
+ * orbit rings + core remain under prefers-reduced-motion (a still system diagram).
+ * ------------------------------------------------------------------------- */
+
+/* Keep the hero content above the animation. */
+.heroBanner :global(.container) {
+  position: relative;
+  z-index: 1;
+}
+
+.system {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  /* Soft-fade the outer orbits so they melt into the hero. */
+  -webkit-mask-image: radial-gradient(
+    125% 100% at 50% 46%,
+    #000 52%,
+    transparent
+  );
+  mask-image: radial-gradient(125% 100% at 50% 46%, #000 52%, transparent);
+}
+
+/* All satellites are positioned relative to this zero-size point (hero centre). */
+.stage {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+}
+
+/* The main JS runtime — a bright, gently breathing core. */
+.core {
+  position: absolute;
+  left: -8px;
+  top: -8px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #eafcff, var(--ifm-color-primary) 68%);
+  box-shadow:
+    0 0 12px 2px var(--ifm-color-primary),
+    0 0 34px 12px color-mix(in srgb, var(--ifm-color-primary) 50%, transparent),
+    0 0 72px 30px color-mix(in srgb, var(--ifm-color-primary) 22%, transparent);
+  animation: rnw-core 4.5s ease-in-out infinite;
+}
+
+/* Expanding rings from the core — the main runtime dispatching/receiving. */
+.corePulse {
+  position: absolute;
+  left: -12px;
+  top: -12px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid var(--ifm-color-primary);
+  opacity: 0;
+  animation: rnw-core-pulse 4.5s ease-out infinite;
+}
+.corePulse2 {
+  animation-delay: 1.5s;
+}
+.corePulse3 {
+  animation-delay: 3s;
+}
+
+/* The faint circular track each worker orbits on. */
+.orbitPath {
+  position: absolute;
+  left: calc(var(--r) * -1);
+  top: calc(var(--r) * -1);
+  width: calc(var(--r) * 2);
+  height: calc(var(--r) * 2);
+  border: 1px solid var(--ifm-color-primary);
+  border-radius: 50%;
+  opacity: 0.09;
+}
+
+/* A rotating arm: origin at the core, length = orbit radius. Carries the spoke,
+ * the message packets, and the worker at its tip. */
+.arm {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: var(--r);
+  height: 0;
+  transform-origin: 0 0;
+  animation: rnw-orbit var(--dur) linear infinite;
+}
+.armReverse {
+  animation-direction: reverse;
+}
+
+/* The connection (message channel) between the core and the worker. */
+.spoke {
+  position: absolute;
+  left: 0;
+  top: -1px;
+  width: 100%;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--ifm-color-primary) 55%, transparent),
+    transparent 88%
+  );
+  opacity: 0.4;
+}
+
+/* A worker runtime at the tip of the arm. */
+.worker {
+  position: absolute;
+  left: var(--r);
+  top: 0;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #eafcff, var(--ifm-color-primary) 72%);
+  box-shadow:
+    0 0 7px 1px var(--ifm-color-primary),
+    0 0 18px 6px color-mix(in srgb, var(--ifm-color-primary) 45%, transparent);
+}
+
+/* postMessage packets travelling along the spoke (out, and a reply back). */
+.packet {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 5px;
+  height: 5px;
+  margin: -2.5px 0 0 -2.5px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow:
+    0 0 5px 1px #fff,
+    0 0 12px 3px color-mix(in srgb, var(--ifm-color-primary) 60%, transparent);
+  opacity: 0;
+  animation: rnw-msg-out var(--pdur) ease-in-out infinite;
+}
+.packetIn {
+  animation-name: rnw-msg-in;
+}
+
+/* Readability scrim: fades the animation out through the central content column
+ * (logo → buttons) while leaving the sun's glow + outer orbits framing the hero.
+ * Sits above the orbits but below the hero content (.container is z-index: 1). */
+.scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse 55% 78% at 50% 40%,
+    var(--ifm-hero-background-color) 18%,
+    color-mix(in srgb, var(--ifm-hero-background-color) 78%, transparent) 48%,
+    transparent 76%
+  );
+}
+
+@keyframes rnw-core {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.92;
+  }
+  50% {
+    transform: scale(1.14);
+    opacity: 1;
+  }
+}
+
+@keyframes rnw-core-pulse {
+  0% {
+    transform: scale(0.5);
+    opacity: 0.5;
+  }
+  100% {
+    transform: scale(9);
+    opacity: 0;
+  }
+}
+
+@keyframes rnw-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes rnw-msg-out {
+  0% {
+    transform: translateX(9px);
+    opacity: 0;
+  }
+  12% {
+    opacity: 1;
+  }
+  88% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(calc(var(--r) - 9px));
+    opacity: 0;
+  }
+}
+
+@keyframes rnw-msg-in {
+  0% {
+    transform: translateX(calc(var(--r) - 9px));
+    opacity: 0;
+  }
+  12% {
+    opacity: 1;
+  }
+  88% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(9px);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .core,
+  .corePulse,
+  .arm,
+  .packet {
+    animation: none;
+  }
+  .corePulse,
+  .packet {
+    opacity: 0;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Showcase — real captures of the example app, under the feature grid
+ * ------------------------------------------------------------------------- */
+
+.showcaseSection {
+  padding: 1rem 0 3.5rem;
+  border-top: 1px solid var(--ifm-color-emphasis-200);
+}
+
+.showcaseHeading {
+  text-align: center;
+  margin-bottom: 0.4rem;
+}
+
+.showcaseLede {
+  text-align: center;
+  color: var(--subtle);
+  max-width: 42rem;
+  margin: 0 auto 1.5rem;
+}

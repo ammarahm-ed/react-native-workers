@@ -3,6 +3,8 @@ sidebar_position: 5
 title: 5. Sensor stream (ring buffer + withLock)
 ---
 
+import DeviceFrame from '@site/src/components/DeviceFrame';
+
 # Building the sensor stream
 
 **What you’ll build:** a worker sampling a signal at a rate the UI does not
@@ -14,6 +16,13 @@ load-bearing. Learn when you need one — and when, as in the transfer manager, 
 don't.
 
 Files: `example/src/workers/sensor.ts` · `example/src/screens/SensorScreen.tsx`
+
+<DeviceFrame
+  width={300}
+  src="/img/screens/sensor.webp"
+  alt="The sensor screen drawing a live waveform from a ring buffer, with counters showing 383 samples produced, a 161Hz producer and a 30Hz reader"
+  caption={<>The finished screen. The two rate counters are the whole point: the producer and the reader never agree on a rate, and neither waits for the other.</>}
+/>
 
 ## Step 1: choose a ring buffer
 

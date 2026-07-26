@@ -23,7 +23,8 @@ Reads and writes are **synchronous and local** — no message, no thread hop, no
 ## Why it's fast
 
 - **Numbers** take a **lock-free** path (`std::atomic<double>` under the hood) — no
-  mutex, no serialization. Measured ~0.11 µs/op → **~8 million writes/second**.
+  mutex, no serialization. Measured ~0.06 µs/op → **~17 million writes/second**
+  (release build, Pixel 5 emulator).
 - Other structured-cloneable values (strings, objects) go through the codec under
   a light lock.
 - Writes notify subscribers **only if there are any** — a hot read/write loop that

@@ -3,6 +3,8 @@ sidebar_position: 8
 title: 8. Native components in JS (UIWorker)
 ---
 
+import DeviceFrame from '@site/src/components/DeviceFrame';
+
 # Building a native component in JavaScript
 
 **What you'll build:** `WorkerSwitch` — a real, native `UISwitch` used from React
@@ -17,6 +19,13 @@ its change event comes back up to React state — but **its view manager is writ
 entirely in JavaScript and registered from inside a `UIWorker` at runtime.** No
 native code, no codegen, no podspec. The same pattern builds `WorkerBadge` (a styled
 label) and `WorkerMap` (a full `MKMapView` with a JS delegate).
+
+<DeviceFrame
+  width={300}
+  src="/img/screens/nativecomponent.webp"
+  alt="The example app rendering a live MKMapView centred on San Francisco with custom pins, a WorkerBadge label and a WorkerSwitch — all host components whose view managers were written in JavaScript"
+  caption={<>The finished screen, running on iOS. Every component here — the map, the badge and the switch — is a genuine React Native host component whose view manager was written in JavaScript and registered from inside a <code>UIWorker</code> at runtime.</>}
+/>
 
 Files: `example/src/workers/nativecomponents.ts` ·
 `example/src/workers/helpers/native-component.ts` ·
@@ -219,7 +228,7 @@ handles this — components just declare `static events` and call `this.emit()`:
 ```ts
 // build the view so RN's event blocks are captured, then emit normally:
 create() {
-  const view = this.eventView(UISwitch).alloc().initWithFrame(CGRectMake(0, 0, 51, 31));
+  const view = this.hostView(UISwitch).alloc().initWithFrame(CGRectMake(0, 0, 51, 31));
   this.onControl(view, UIControlEvents.ValueChanged, () =>
     this.emit('onValueChange', { value: view.on })
   );
@@ -239,13 +248,61 @@ On the host, the only extra step is telling RN about the event names, which
 `createWorkerComponent` does from the descriptor (a `bubblingEventTypes` entry per
 `on<Event>`); the `on*` callbacks then pass straight through to the view.
 
-:::note[How the block gets invoked]
-NativeScript refuses to call a native block it was handed at runtime (it has no
-metadata signature to build the call from). The Obj-C runtime has no such
-limitation: `imp_implementationWithBlock` turns the block into a method IMP, and
-messaging that method invokes it. The helper captures RN's block via `eventView()`
-and fires it this way — you never see any of it.
-:::
+## Step 5b: containers with nested React children
+
+A worker-defined component can be a **container**: anything you nest inside it in
+JSX mounts into its native view, laid out by Yoga against that view's box. That
+also rides RN's own path — Fabric's interop layer calls `insertReactSubview:atIndex:`
+and then `didUpdateReactSubviews` on your view, and the default implementation of
+the latter simply `addSubview:`s the children. So children work with no extra code.
+
+Override `childrenView()` when UIKit wants them somewhere other than the view
+itself — a `UIVisualEffectView` only accepts subviews in its `contentView`:
+
+```ts title="workers/nativecomponents.ts"
+class WorkerCard extends NativeComponent {
+  static props = ['material', 'cornerRadius'];
+  static events = ['onChildrenChange'];
+
+  create() {
+    return this.hostView(UIVisualEffectView)
+      .alloc()
+      .initWithEffect(UIBlurEffect.effectWithStyle(UIBlurEffectStyle.Regular));
+  }
+
+  childrenView() {
+    return this.view.contentView;      // where React children land
+  }
+
+  childrenChanged(count: number) {     // React added or removed children
+    setTimeout(() => this.emit('onChildrenChange', { count }), 0);
+  }
+}
+```
+
+```tsx
+<WorkerCard material="regular" cornerRadius={18}>
+  <Text>San Francisco</Text>
+  <Text>2 pins · backdrop blurred by UIKit</Text>
+</WorkerCard>
+```
+
+Three things are worth knowing about containers:
+
+- **Don't set `padding` on the container's style.** RN gives a legacy-interop
+  component's view the *content* frame (inset by padding and border) while Yoga has
+  already offset the children by the same amount — so padding insets them twice.
+  Put the spacing on the children (margins) or apply it natively.
+- **`childrenChanged()` reports mounted native views, not JSX nodes.** RN collapses
+  layout-only `View`s, so their children arrive as the container's own. The helper
+  calls it only when the count actually changes: RN calls `didUpdateReactSubviews`
+  after *every* update, so reacting to each call (by emitting an event, say) would
+  loop forever.
+- **Nesting another worker-defined component needs a real view in between.** RN
+  mounts an interop child of an interop parent by re-parenting the child's own view,
+  which loses its position and drops it at the container's origin. Wrapping it in
+  `<View collapsable={false}>` keeps a genuine RN view as the parent and it lays out
+  normally.
 
 ## Step 6: use it like any component
 
@@ -269,7 +326,7 @@ const WorkerSwitch = createWorkerComponent(descriptors.find(d => d.name === 'Wor
 
 `value` flows down as a native prop; the change event comes back up through RN's
 native event pipeline to React state — the whole loop running through the worker, on
-the main thread, with no bridge in either direction.
+the main thread.
 
 ## It's native the whole way
 
@@ -281,7 +338,7 @@ is used only **once**, to fetch the component descriptors at startup.
 That means a worker-defined component behaves like a codegen'd one: props are
 batched with reconciliation, events dispatch through RN's own event system, and both
 cross the JS-thread → UI-thread boundary exactly once (the cost that actually
-matters). No per-prop or per-event message, no tag bookkeeping.
+matters).
 
 ## The reusable pieces
 
@@ -293,7 +350,7 @@ small helpers.
 
 | Export | What it does |
 | --- | --- |
-| `class NativeComponent` | The base class: declare `static props` / `static events` (and optional `static componentName`), implement `create()` / `update(props)` / `dispose()`. Gives you `this.view`, plus `emit(event, payload)`, `eventView(Base)` (the view class to build so RN's event blocks are captured), `onControl(control, events, cb)`, and `delegate(protocols, methods)` for Obj-C delegates from JS. One instance per mounted view. |
+| `class NativeComponent` | The base class: declare `static props` / `static events` (and optional `static componentName`), implement `create()` / `update(props)` / `dispose()`. Gives you `this.view`, plus `emit(event, payload)`, `hostView(Base)` (the view class to build so RN's event blocks are captured and React children are routed), `childrenView()` / `childrenChanged(count)` for container components, `onControl(control, events, cb)`, and `delegate(protocols, methods)` for Obj-C delegates from JS. One instance per mounted view. |
 | `registerComponents(classes)` | For each class, builds a runtime `RCTViewManager` subclass: a `-view` method, per declared prop the metadata + setter RN needs to send it down natively, and per declared event the `RCTBubblingEventBlock` propConfig RN needs to wire it up. Registers it with `RCTRegisterModule`, remembers `name → descriptor` (re-registering the same name is a no-op), and returns the descriptors. |
 | `serveComponents()` | Registers the `nativecomponents` RPC module with a single `list()` that returns the descriptors — a one-time host query, not a runtime channel. |
 
@@ -320,7 +377,7 @@ flowchart TB
     WC["class WorkerSwitch<br/>static props / events<br/>create() / update()"]
     WR["registerComponents()"]
     WM["RCTViewManager.extend<br/>+ propConfig class methods<br/>+ RCTRegisterModule"]
-    WV["create() builds UISwitch<br/>(eventView captures RN's block)"]
+    WV["create() builds UISwitch<br/>(hostView captures RN's block)"]
     WE["emit('onValueChange', {value})<br/>→ invoke RN's block"]
   end
 
@@ -399,6 +456,18 @@ the annotations; the map's own `onSelectPin` / `onRegionChange` come back up RN'
 native event pipeline. Building a delegate from JS is the single hardest thing in
 Objective-C interop, and it's a few lines here. See `workers/nativecomponents.ts` for
 the full component.
+
+The same UIWorker trick without React in the picture at all — building a `UIView`,
+a `CAGradientLayer` and a `UILabel` imperatively inside the worker and attaching
+them to a React-rendered view by its Fabric tag — is the
+[NativeScript interop screen](../examples#nativescript-interop--the-whole-ios-sdk-from-a-worker):
+
+<DeviceFrame
+  width={300}
+  src="/img/screens/nativescript.webp"
+  alt="The NativeScript interop screen: a gradient UIKit view reading 'UIKit, built in a worker', with a log showing interop installed, onMain=true, and 5427 Obj-C classes reachable from the worker runtime"
+  caption={<>A <code>UIView</code> + <code>CAGradientLayer</code> + <code>UILabel</code> built in worker JavaScript and attached to a React-rendered view. The log line comes from the worker runtime itself: 5,427 Obj-C classes reachable, on the main thread, with no dispatch.</>}
+/>
 
 ## What to take away
 

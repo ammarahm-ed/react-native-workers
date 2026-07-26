@@ -4,6 +4,8 @@ title: Introduction
 slug: /intro
 ---
 
+import DeviceFrame, { Showcase } from '@site/src/components/DeviceFrame';
+
 # react-native-workers
 
 **Web Worker–style multithreading for React Native.** Each worker runs your
@@ -56,7 +58,7 @@ primitives, from async messaging down to raw shared memory.
   - [`SharedStore`](./shared-data/shared-store) — synchronized, watchable,
     granularly-patchable shared state (lazy reads, `setIn`, `subscribeIn`).
   - [`SharedValue`](./shared-data/shared-value) — a single synchronous cell,
-    lock-free for numbers (~8M writes/sec).
+    lock-free for numbers (~17M writes/sec).
   - [`SharedBuffer`](./shared-data/shared-buffer) — true zero-copy shared memory
     across runtimes for bulk numeric work.
 - **Typed RPC** — the [JSModule bridge](./rpc/jsmodule-bridge) and
@@ -72,10 +74,38 @@ primitives, from async messaging down to raw shared memory.
   bytecode and ship [~150 KB each](./guides/bundling), not the ~1.4 MB of the
   full framework.
 
+## See it running
+
+Everything on this site is demonstrated by the
+[example app](https://github.com/ammarahm-ed/react-native-workers/tree/main/example) —
+one screen per feature, all runnable on a simulator or device. These are captures
+of it on iOS:
+
+<Showcase>
+  <DeviceFrame
+    width={228}
+    src="/img/screens/home.webp"
+    alt="The example app's home list, with a screen for each feature: note editor, parallel parse, sensor stream, image filters, transfer manager, search service, UIWorker and NativeScript interop"
+    caption={<>The example app: one screen per feature, each a small, real app rather than a snippet.</>}
+  />
+  <DeviceFrame
+    width={228}
+    src="/img/screens/notes.webp"
+    alt="A note editor whose word, character, unique-word and reading-time stats are computed in a worker through a SharedStore, with a debounced autosave"
+    caption={<><a href="./tutorials/note-editor">Note editor</a> — the editor and the worker never exchange a message; both are attached to one <code>SharedStore</code>.</>}
+  />
+  <DeviceFrame
+    width={228}
+    src="/img/screens/search.webp"
+    alt="A search screen listing matches from a 2000-document inverted index built inside a worker in 28ms, with a log of the worker calling back into the host"
+    caption={<><a href="./tutorials/search-service">Search service</a> — the worker owns the index and calls back into a host module for its data.</>}
+  />
+</Showcase>
+
 ## Requirements
 
 - React Native with the **New Architecture** (bridgeless) and **Hermes**.
-- RN 0.76+ (developed against **0.85**).
+- RN 0.81.4+ (developed against **0.86**).
 - iOS and Android.
 
 ## Where to next

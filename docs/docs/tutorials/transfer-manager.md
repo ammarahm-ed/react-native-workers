@@ -3,6 +3,8 @@ sidebar_position: 3
 title: 3. Transfer manager (SharedValue)
 ---
 
+import DeviceFrame from '@site/src/components/DeviceFrame';
+
 # Building the transfer manager
 
 **What you’ll build:** six simulated downloads running in a worker, with live
@@ -13,6 +15,13 @@ draws it.
 **sample** the value instead of subscribing to it.
 
 Files: `example/src/workers/downloads.ts` · `example/src/screens/DownloadsScreen.tsx`
+
+<DeviceFrame
+  width={300}
+  src="/img/screens/downloads.webp"
+  alt="The transfer manager screen with six progress bars, some finished and some downloading, and a cost line reading 'shared writes by the worker: 1041, frames rendered here: 142'"
+  caption={<>The finished screen. The cost line at the bottom is the lesson: the worker wrote 1,041 times while the UI drew 142 frames, and no callback was fired for the difference.</>}
+/>
 
 ## Step 1: recognise the access pattern
 

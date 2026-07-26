@@ -3,6 +3,8 @@ sidebar_position: 3
 title: Quick start
 ---
 
+import DeviceFrame from '@site/src/components/DeviceFrame';
+
 # Quick start
 
 This page builds up from the simplest possible worker to something useful. Every
@@ -42,6 +44,13 @@ worker.postMessage(42);
 The path is relative to the file that calls `new Worker(...)`, and loading it needs
 the one-line [Babel plugin](./installation#3-add-the-babel-plugin) — the plugin
 compiles each worker file into its own bundle.
+
+:::info[Alpha status]
+File workers load fully in **development** (Metro serves each worker bundle). Loading
+them from a **release** build needs a native asset reader that's still being finished
+— see [Bundling for release](./guides/bundling). **Inline workers** (next section)
+already work everywhere, dev and release.
+:::
 
 Data is **structured-cloned** across the thread boundary — objects, arrays,
 `Date`, typed arrays, `ArrayBuffer`, and cycles all work.
@@ -109,6 +118,19 @@ const worker = new Worker({
 
 For hot numbers use [`SharedValue`](./shared-data/shared-value); for bulk arrays
 use [`SharedBuffer`](./shared-data/shared-buffer).
+
+## What it looks like in practice
+
+Here is that idea at full size: the [image-filters example](./tutorials/image-filters)
+keeps a bitmap in shared memory and filters it in a worker, then reports the worst
+UI frame gap the run caused — one frame, for work that takes a quarter of a second.
+
+<DeviceFrame
+  width={300}
+  src="/img/screens/imagefx.webp"
+  alt="The image-filters screen showing a source and a blurred image side by side, with a line reading 'blur in the worker — filter 254ms, encode 22ms' and 'worst UI frame gap during that run: 17ms'"
+  caption={<>Run the same blur on the JS thread with the red button and the frame gap becomes the whole duration. Same pixels, same work, wrong thread.</>}
+/>
 
 ## Where to go next
 

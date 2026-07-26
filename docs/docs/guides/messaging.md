@@ -53,7 +53,7 @@ things that hold native handles. Sending an unsupported value throws a
 
 Binary payloads (`ArrayBuffer` / typed arrays) are the common heavy case — image
 bytes, database blobs. They are copied at most once and decoded zero-copy on the
-receiving side, so throughput is high (measured ~1.5 GB/s on Android).
+receiving side, so throughput is high (measured ~5 GB/s on Android).
 
 You can pass a **transfer list** as the second argument to hint that a buffer is
 being handed off:
