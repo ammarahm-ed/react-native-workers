@@ -177,18 +177,26 @@ function build(dir, logPath) {
       logPath
     );
   }
-  // iOS
-  const workspace = fs.readdirSync(path.join(abs, 'ios')).find((f) => f.endsWith('.xcworkspace'));
-  const scheme = workspace ? workspace.replace('.xcworkspace', '') : 'MatrixApp';
-  return (
-    run(`cd ios && pod install`, abs, logPath) &&
-    run(
-      `cd ios && xcodebuild -workspace "${workspace}" -scheme "${scheme}" ` +
-        `-configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' ` +
-        `build CODE_SIGNING_ALLOWED=NO`,
-      abs,
-      logPath
-    )
+  // iOS. The .xcworkspace is created BY `pod install`, so it can only be
+  // discovered afterwards — reading the directory first finds nothing on a fresh
+  // scaffold and hands xcodebuild the literal string "undefined".
+  if (!run(`cd ios && pod install`, abs, logPath)) return false;
+  const iosDir = path.join(abs, 'ios');
+  const workspace = fs.readdirSync(iosDir).find((f) => f.endsWith('.xcworkspace'));
+  if (!workspace) {
+    fs.appendFileSync(
+      logPath,
+      `\n[matrix] no .xcworkspace in ${iosDir} after pod install\n`
+    );
+    return false;
+  }
+  const scheme = workspace.replace('.xcworkspace', '');
+  return run(
+    `cd ios && xcodebuild -workspace "${workspace}" -scheme "${scheme}" ` +
+      `-configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' ` +
+      `build CODE_SIGNING_ALLOWED=NO`,
+    abs,
+    logPath
   );
 }
 

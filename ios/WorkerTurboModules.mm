@@ -204,11 +204,26 @@ std::function<void(jsi::Runtime &)> installWorkerTurboModules(
                                               bundleManager:nil
                                           callableJSModules:callableJSModules];
 
+  // RN 0.87 REMOVED the 4-argument initializer and kept only the variant that
+  // also takes a dev-menu configuration decorator (0.86 ships both). Same
+  // tolerance idea as WorkerTurboModuleCompat.h's provider-arity branch: gate on
+  // the version so every already-supported RN keeps the exact call it had.
+  // A worker has no dev menu, so the decorator is nil.
+#if defined(REACT_NATIVE_VERSION_MINOR) && \
+    (REACT_NATIVE_VERSION_MAJOR > 0 || REACT_NATIVE_VERSION_MINOR >= 87)
+  RCTTurboModuleManager *manager =
+      [[RCTTurboModuleManager alloc] initWithBridgeProxy:nil
+                                  bridgeModuleDecorator:decorator
+                                               delegate:delegate
+                                              jsInvoker:workerInvoker
+                          devMenuConfigurationDecorator:nil];
+#else
   RCTTurboModuleManager *manager =
       [[RCTTurboModuleManager alloc] initWithBridgeProxy:nil
                                   bridgeModuleDecorator:decorator
                                                delegate:delegate
                                               jsInvoker:workerInvoker];
+#endif
   [manager installJSBindings:rt];
 
   // Cleanup: invalidate on the worker thread WHILE the runtime is still alive, so
