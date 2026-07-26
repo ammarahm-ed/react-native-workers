@@ -67,8 +67,7 @@ that are worth knowing up front:
 ```js
 const worker = new Worker('./workers/importer', {
   nativeModules: true, // let the worker reach the app's native modules (more below)
-  maxHeapMb: 512,      // per-worker Hermes heap cap (default 256)
-  inspectable: true,   // allow a Hermes debugger to attach to this worker
+  name: 'importer',    // shows up in logs and in the DevTools target list
 });
 ```
 
@@ -119,11 +118,12 @@ It helps to know what actually happens when you write `new Worker('./workers/hea
 
 - **A fresh Hermes runtime is created on a dedicated thread** (via
   `hermes::makeHermesRuntime`). Nothing is shared implicitly — the worker has its own
-  globals, its own module registry, its own garbage collector, capped by `maxHeapMb`.
-- **Worker files are compiled into their own bundles.** A Metro transformer picks up
-  each `new Worker('./path')`, bundles that module (and its imports) separately, and
-  wires it to load by relative path. You write normal modules; you don't hand-manage
-  bundles. Inline workers skip this entirely.
+  globals, its own module registry, its own garbage collector, capped at Hermes'
+  256 MB heap default.
+- **Worker files are compiled into their own bundles.** A Babel plugin picks up each
+  `new Worker('./path')`, points it at a bundle built from that module (and its
+  imports), and Metro serves or ships that bundle. You write normal modules; you
+  don't hand-manage bundles. Inline workers skip this entirely.
 - **Messages cross via a structured-clone codec** — objects, arrays, `Date`, typed
   arrays, `ArrayBuffer`, and cycles are serialized between runtimes.
 - **A per-worker `CallInvoker` keeps everything thread-consistent.** Async native work
@@ -308,9 +308,9 @@ and other runtimes see the change (the [note-editor tutorial](/docs/tutorials/no
 builds a whole editor on it):
 
 ```js
-import { reactive } from '@ammarahmed/react-native-workers';
+import { reactive, SharedStore } from '@ammarahmed/react-native-workers';
 
-const state = reactive();  // a shared, observable object
+const state = reactive(new SharedStore('import')); // observable, cross-runtime
 state.progress = 0;        // set from the worker
 state.progress += 0.1;     // mutate; the UI's subscription fires
 ```
@@ -386,12 +386,11 @@ can listen for the same app-level events the main thread sees — the
 Workers aren't a black box:
 
 - **`console.*` inside a worker is forwarded to your main logs**, tagged per worker
-  (`[RNWorker <id>]`), so you see worker output where you already look.
-- **`inspectable: true`** attaches a Hermes debugger to a worker (background workers
-  are inspectable by default). Set breakpoints and step through worker code like any
-  other runtime.
-- **`maxHeapMb`** lets you cap (or raise) a worker's heap when you know it's doing
-  something memory-heavy.
+  (`[Worker:<name>]`), so you see worker output where you already look.
+- **Every background worker is its own DevTools target** — breakpoints and stepping,
+  no flag required. A `UIWorker` is the exception: it runs on the main thread, where
+  a debugger pause freezes the whole app, so it takes an explicit
+  `inspectable: true`.
 
 ## Tested against a lot of React Native and Expo
 
@@ -430,11 +429,11 @@ benchmark screen — both of which you can run yourself from the
 The core is implemented and tested on both platforms, and the API is close to what I
 want it to be — but this is a `1.0.0-alpha`, so:
 
-- **Release loading for *file* workers is still being finished.** File workers load
-  fully in **development** (Metro serves each worker bundle); loading them from a
-  **release** build needs a native asset reader that's in progress. **Inline workers
-  work everywhere**, dev and release, so you're never blocked — see
-  [Bundling for release](/docs/guides/bundling).
+- **Release builds need one extra build step.** In development Metro serves each
+  worker bundle and there's nothing to set up; a release build compiles them ahead
+  of time and ships them inside the app, which means wiring the bundling step into
+  Xcode/Gradle — see [Bundling for release](/docs/guides/bundling). **Inline
+  workers** need no build setup at all.
 - **Structured clone** doesn't yet copy `Map`, `Set`, `RegExp`, `Error`, or `BigInt`.
 - **`Thread` is experimental**, off unless you call
   `enableMultiThreadingExperimental()`, and its shape may change. There is no
@@ -447,10 +446,12 @@ If you hit an edge, that's exactly the feedback this release is for.
 
 A couple of things on the near horizon:
 
-- **Finishing release file-worker loading** — the native asset reader on both
-  platforms, so file workers ship in release builds too.
+- **A wider clone subset** — `Map`, `Set`, `RegExp` and `Error` across the
+  boundary, so fewer values need reshaping before you send them.
 - **Transferables** — a `postMessage(msg, [transfer])` transfer-list on top of the
   shared-memory primitives that already exist, for true zero-copy handoff.
+- **Settling `Thread`** — the experimental API either graduates or changes shape
+  based on what people hit using it.
 
 ## Try it
 

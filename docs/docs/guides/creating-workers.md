@@ -16,7 +16,7 @@ Install the [Babel plugin](./bundling), then reference the file by relative path
 ```js title="src/workers/resize.js"
 self.onmessage = (e) => {
   const resized = resize(e.data.bytes, e.data.width);
-  self.postMessage(resized, [resized.buffer]); // transfer the bytes
+  self.postMessage(resized, [resized.buffer]); // transfer list — a throughput hint
 };
 ```
 
@@ -53,17 +53,19 @@ everything — the worker environment (`self`, `postMessage`, timers, `SharedSto
 ```ts
 new Worker(source, {
   name?: string,          // a label (useful in logs)
-  maxHeapMb?: number,     // per-worker Hermes heap cap (default 256)
   nativeModules?: boolean,// opt into platform (Java/ObjC) TurboModules (default false)
 });
 ```
 
 - **`name`** — a human-readable label.
-- **`maxHeapMb`** — cap the worker's Hermes heap. Lower it for many small workers.
 - **`nativeModules`** — build the per-worker platform TurboModule manager so the
   worker can call Java/ObjC modules. Off by default (it costs memory + teardown);
   C++ modules and nested workers work without it. See
   [Native modules](./native-modules).
+
+`UIWorker` takes two more — `independent` and `inspectable` — described in the
+[UIWorker guide](./ui-worker). A `maxHeapMb` option also exists on the type, but
+it is **not applied yet**: every worker currently gets Hermes' 256 MB default.
 
 ## Sending and receiving
 
@@ -130,11 +132,14 @@ Inside a worker you have:
 - `self`, `postMessage`, `onmessage`, `close()`, `addEventListener`,
   `MessageEvent` / `ErrorEvent`;
 - `setTimeout` / `setInterval` / `clearTimeout` / `clearInterval` /
-  `queueMicrotask`, Promises, `async`/`await`;
-- `structuredClone`;
+  `setImmediate` / `clearImmediate` / `queueMicrotask`, Promises, `async`/`await`;
+- `structuredClone`, `console` (forwarded to the host logs), `location`,
+  `importScripts()`;
 - `Worker` (nested), `SharedStore`, `SharedValue`, `SharedBuffer`;
 - `JSModule` / `parent` / `defineModule` (the [RPC bridge](../rpc/jsmodule-bridge));
 - `NativeEventEmitter` and the native-module accessor (see
-  [Native modules](./native-modules)).
+  [Native modules](./native-modules));
+- `Thread` / `enableMultiThreadingExperimental()` — opt-in and experimental, for
+  running this worker's own runtime on another thread ([Thread hopping](./threads)).
 
 There is **no DOM** and no React — a worker is a headless compute environment.

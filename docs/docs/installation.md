@@ -183,7 +183,7 @@ npx expo prebuild --clean
 npx expo run:ios     # or: npx expo run:android
 ```
 
-A runnable reference lives in [`expo-example/`](https://github.com/ammarahm-ed/ammarahmed-react-native-workers/tree/main/expo-example).
+A runnable reference lives in [`expo-example/`](https://github.com/ammarahm-ed/react-native-workers/tree/main/expo-example).
 
 ### Expo modules inside a worker
 

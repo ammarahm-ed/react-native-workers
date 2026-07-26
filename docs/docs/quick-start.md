@@ -45,11 +45,12 @@ The path is relative to the file that calls `new Worker(...)`, and loading it ne
 the one-line [Babel plugin](./installation#3-add-the-babel-plugin) — the plugin
 compiles each worker file into its own bundle.
 
-:::info[Alpha status]
-File workers load fully in **development** (Metro serves each worker bundle). Loading
-them from a **release** build needs a native asset reader that's still being finished
-— see [Bundling for release](./guides/bundling). **Inline workers** (next section)
-already work everywhere, dev and release.
+:::info[Dev vs release]
+In **development**, Metro serves each worker bundle — nothing to set up. For a
+**release** build the bundles are built ahead of time and shipped inside the app
+(Hermes bytecode, loaded by the library's own asset reader); that needs one build
+step, described in [Bundling for release](./guides/bundling). **Inline workers**
+(next section) need no build setup at all.
 :::
 
 Data is **structured-cloned** across the thread boundary — objects, arrays,

@@ -87,6 +87,43 @@ one-way. Bridge traffic is multiplexed alongside your own `postMessage` traffic
   app classloader so JNI can resolve your classes. The manager is invalidated before
   the runtime is destroyed, so nothing leaks.
 
+## Expo Modules in a worker
+
+`requireNativeModule(...)` works inside a worker on both platforms, but the two
+get there by opposite routes — because Expo's own install path differs:
+
+- **iOS** — Expo's `AppContext` is bound to the app's main runtime, and the
+  Swift↔C++ boundary makes binding a second one to a worker impractical. So the
+  library installs its **own** `global.expo.modules` host object in the worker and
+  forwards each call natively through Expo's public `AppContext` API. Native values
+  go in and come back out; nothing crosses between runtimes. Events and live
+  properties are read on the main thread and delivered back on the worker thread.
+- **Android** — Expo's JNI install accepts a raw runtime pointer, so the library
+  builds a genuine **per-worker `AppContext`** and lets Expo install `global.expo`
+  against the worker runtime directly. Every feature runs through Expo's own code,
+  with per-worker module instances (like the per-worker TurboModules above).
+
+Because both lean on Expo internals, the compat matrix builds against each SDK to
+catch the release that changes them.
+
+## Thread hopping: one runtime, one lock
+
+The experimental [`Thread`](./guides/threads) API runs a worker's *existing*
+runtime on a different OS thread for the length of a callback — no second runtime,
+no serialization.
+
+What makes that safe is a **per-worker recursive lock** that every entry into the
+runtime takes: the event loop, timers, native-module callbacks, the debugger, and
+`Thread.run` alike. Exactly one thread is ever inside the runtime, so a `run()`
+body is atomic against everything else. The lock machinery is always active — it
+costs an uncontended mutex per JS task — and
+`enableMultiThreadingExperimental()` only opens the door to it; it never switches
+the protection on.
+
+Promise settlement is posted back through the worker's own `CallInvoker`, which is
+why `await` always resumes on the worker's own thread instead of silently leaving
+your code on a foreign one, and why settlement goes inert on teardown.
+
 ## Lifetime & safety
 
 Teardown is careful: on `terminate()` the worker finishes its current task, runs

@@ -1,4 +1,4 @@
-import { Fragment, type CSSProperties, type ReactNode } from 'react';
+import { type CSSProperties, type ReactNode } from 'react';
 import clsx from 'clsx';
 import Link from '@docusaurus/Link';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
@@ -21,60 +21,33 @@ const worker = new Worker('./workers/double');
 worker.onmessage = (e) => console.log(e.data); // 42
 worker.postMessage(21);`;
 
-// The hero background: a "runtime system". The glowing core is the app's MAIN JS
-// runtime (UI thread); each orbiting satellite is a worker runtime on its own
-// thread; the packets sliding along each rotating spoke are `postMessage` traffic
-// (outbound + a reply). Concentric orbits at different radii/speeds = independent
-// workers. Pure CSS/HTML — only transform + opacity animate. See index.module.css.
-const ORBITS: { r: number; dur: number; pdur: number }[] = [
-  { r: 92, dur: 15, pdur: 2.0 },
-  { r: 152, dur: 23, pdur: 2.8 },
-  { r: 220, dur: 32, pdur: 3.6 },
-  { r: 300, dur: 43, pdur: 4.6 },
-];
+// The hero background: a field of parallel threads. Each lane is an OS thread and
+// the pulse travelling down it is work in flight — many lanes running at their own
+// speeds, at the same time, which is the whole pitch. Same treatment as the launch
+// cards. Pure CSS/HTML — only `transform` animates. See index.module.css.
+const LANES = 16;
 
-function RuntimeSystem(): ReactNode {
+function ThreadField(): ReactNode {
   return (
-    <div className={styles.system} aria-hidden="true">
-      <div className={styles.stage}>
-        {/* Main JS runtime (the "sun"). */}
-        <span className={styles.core} />
-        <span className={clsx(styles.corePulse, styles.corePulse2)} />
-        <span className={styles.corePulse} />
-        <span className={clsx(styles.corePulse, styles.corePulse3)} />
-
-        {/* Worker runtimes orbiting the main runtime. */}
-        {ORBITS.map((o, i) => {
-          const reverse = i % 2 === 1;
-          const orbitVars = {
-            '--r': `${o.r}px`,
-            '--dur': `${o.dur}s`,
-            '--pdur': `${o.pdur}s`,
-          } as CSSProperties;
-          return (
-            <Fragment key={i}>
-              <span
-                className={styles.orbitPath}
-                style={{ '--r': `${o.r}px` } as CSSProperties}
-              />
-              <span
-                className={clsx(styles.arm, reverse && styles.armReverse)}
-                style={orbitVars}
-              >
-                <span className={styles.spoke} />
-                <span className={styles.packet} />
-                <span
-                  className={clsx(styles.packet, styles.packetIn)}
-                  style={{ '--pdelay': `${o.pdur * 0.5}s` } as CSSProperties}
-                />
-                <span className={styles.worker} />
-              </span>
-            </Fragment>
-          );
-        })}
-      </div>
+    <div className={styles.field} aria-hidden="true">
+      {Array.from({ length: LANES }, (_, i) => (
+        <span
+          key={i}
+          className={styles.lane}
+          style={
+            {
+              '--top': `${((i + 0.5) * 100) / LANES}%`,
+              // Coprime-ish spread so the lanes never fall into lockstep.
+              '--dur': `${(4.2 + (i % 5) * 1.3).toFixed(2)}s`,
+              '--delay': `${(-((i * 0.83) % 6)).toFixed(2)}s`,
+            } as CSSProperties
+          }
+        />
+      ))}
+      <span className={styles.grid} />
+      <span className={styles.glow} />
       {/* Calms the animation behind the centred hero copy so the logo, title and
-          buttons stay crisp; the sun's glow + outer orbits still frame the edges. */}
+          buttons stay crisp; the lanes still run at the edges. */}
       <div className={styles.scrim} />
     </div>
   );
@@ -84,7 +57,7 @@ function HomepageHeader() {
   const { siteConfig } = useDocusaurusContext();
   return (
     <header className={clsx('hero hero--primary', styles.heroBanner)}>
-      <RuntimeSystem />
+      <ThreadField />
       <div className="container">
         <Logo size={112} glow className={styles.heroLogo} />
         <Heading as="h1" className="hero__title">

@@ -271,9 +271,15 @@ Structured clone (objects, arrays, cycles, typed arrays, `ArrayBuffer`, `Date`),
 Promises, `structuredClone`, error propagation to `onerror`, `terminate`, worker
 isolation, and `NativeEventEmitter`.
 
+Also inside a worker: **Expo Modules** via `requireNativeModule(...)` on both
+platforms, and the experimental
+[`Thread`](https://ammarahm-ed.github.io/react-native-workers/docs/guides/threads)
+API for running a worker's own runtime on another thread.
+
+`Map` / `Set` / `RegExp` / `Error` / `BigInt` are not in the clone subset yet.
 Full transfer-list detach and `SharedArrayBuffer` are out of scope (Hermes
 limitations) — [`SharedBuffer`](#a-tour) covers the shared-memory use case
-instead. Current status and known gaps: [`IMPLEMENTATION.md`](IMPLEMENTATION.md).
+instead.
 
 ## Example app
 

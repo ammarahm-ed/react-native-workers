@@ -53,6 +53,9 @@ primitives, from async messaging down to raw shared memory.
 - **Native modules inside workers** — call C++ (Cxx) modules, platform
   (Java/ObjC) TurboModules and legacy modules from a worker; subscribe to
   `NativeEventEmitter` events.
+- **Expo Modules inside workers** — `requireNativeModule(...)` works in a worker
+  on [both iOS and Android](./installation#expo-modules-inside-a-worker):
+  constants, sync **and** async functions, live properties, and module events.
 - **Nested workers** — a worker can spawn its own workers.
 - **A spectrum of shared data**:
   - [`SharedStore`](./shared-data/shared-store) — synchronized, watchable,
@@ -67,6 +70,9 @@ primitives, from async messaging down to raw shared memory.
 - **`UIWorker`** — a worker whose JS runs on the platform UI/main thread. Its
   runtime is [shared and persistent](./guides/ui-worker#shared-persistent-runtimes)
   by default, so it survives navigation.
+- **[`Thread`](./guides/threads) (experimental)** — run a worker's *own* runtime
+  on another thread for the length of a callback: no second runtime, nothing
+  serialized, every captured binding intact. Opt in per worker.
 - **Debuggable** — every background worker is its own
   [DevTools target](./guides/debugging) (breakpoints, stepping, sources), and
   `console` output is forwarded to the host, tagged with the worker's name.
