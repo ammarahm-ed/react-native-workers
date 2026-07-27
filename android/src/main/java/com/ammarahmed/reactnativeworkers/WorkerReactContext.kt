@@ -11,6 +11,7 @@ import com.facebook.react.bridge.LifecycleEventListener
 import com.facebook.react.bridge.NativeModule
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.UIManager
+import com.facebook.react.module.annotations.ReactModule
 import com.facebook.react.common.LifecycleState
 import com.facebook.react.turbomodule.core.interfaces.CallInvokerHolder
 
@@ -130,16 +131,75 @@ internal abstract class WorkerReactContext(
       host.getJSModule(jsInterface)
     }
 
-  override fun <T : NativeModule> hasNativeModule(nativeModuleInterface: Class<T>): Boolean =
-    host.hasNativeModule(nativeModuleInterface)
+  // --- peer native modules: this worker's instances, not the host's -----------
+  //
+  // Modules reach for each other through the context. Answered by the host, a
+  // worker module would be handed the HOST's instance of its peer — a live object
+  // bound to the host runtime, shared with the main app, and not built for this
+  // worker's thread. Resolving through the worker's own TurboModuleManager keeps a
+  // worker's module graph entirely its own.
+  //
+  // Falls back to the host when there is no worker manager (Cxx-only workers, and
+  // the Expo AppContext path) or when the name isn't one of the worker's.
 
+  /** Set once the worker's TurboModuleManager exists (see WorkerTurboModules). */
+  @Volatile
+  private var moduleResolver: ((String) -> NativeModule?)? = null
+
+  /** Names currently being resolved on this thread — see [workerModule]. */
+  private val resolving = ThreadLocal.withInitial { HashSet<String>() }
+
+  internal fun attachModuleResolver(resolver: (String) -> NativeModule?) {
+    moduleResolver = resolver
+  }
+
+  /**
+   * A worker-local module by name, or null.
+   *
+   * Guarded against re-entrancy: resolving a module constructs it, and a
+   * constructor that asks the context for a peer would otherwise re-enter the
+   * manager for a name already in flight. Inside such a cycle we defer to the
+   * host rather than deadlock or recurse.
+   */
+  private fun workerModule(name: String): NativeModule? {
+    val resolver = moduleResolver ?: return null
+    val inFlight = resolving.get() ?: return null
+    if (!inFlight.add(name)) return null
+    return try {
+      resolver(name)
+    } catch (t: Throwable) {
+      null
+    } finally {
+      inFlight.remove(name)
+    }
+  }
+
+  /** The `@ReactModule` name RN registers a module class under, if annotated. */
+  private fun moduleNameOf(cls: Class<*>): String? =
+    cls.getAnnotation(ReactModule::class.java)?.name
+
+  override fun <T : NativeModule> hasNativeModule(nativeModuleInterface: Class<T>): Boolean =
+    moduleNameOf(nativeModuleInterface)?.let { workerModule(it) != null } == true ||
+      host.hasNativeModule(nativeModuleInterface)
+
+  // The worker's manager builds modules lazily, so it has no meaningful "all
+  // modules" answer; this stays the host's list.
   override fun getNativeModules(): Collection<NativeModule> = host.nativeModules
 
-  override fun <T : NativeModule> getNativeModule(nativeModuleInterface: Class<T>): T? =
-    host.getNativeModule(nativeModuleInterface)
+  @Suppress("UNCHECKED_CAST")
+  override fun <T : NativeModule> getNativeModule(nativeModuleInterface: Class<T>): T? {
+    val name = moduleNameOf(nativeModuleInterface)
+    if (name != null) {
+      val worker = workerModule(name)
+      if (worker != null && nativeModuleInterface.isInstance(worker)) {
+        return worker as T
+      }
+    }
+    return host.getNativeModule(nativeModuleInterface)
+  }
 
   override fun getNativeModule(moduleName: String): NativeModule? =
-    host.getNativeModule(moduleName)
+    workerModule(moduleName) ?: host.getNativeModule(moduleName)
 
   override fun getCatalystInstance(): CatalystInstance = host.catalystInstance
 

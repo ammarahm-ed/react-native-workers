@@ -220,11 +220,16 @@ object WorkerTurboModules {
         .setPackages(packages)
         .setReactApplicationContext(workerContext)
         .build()
-    return TurboModuleManager(
-      runtimeExecutor,
-      delegate,
-      jsCallInvokerHolder,
-      nativeMethodCallInvokerHolder,
-    )
+    val manager =
+      TurboModuleManager(
+        runtimeExecutor,
+        delegate,
+        jsCallInvokerHolder,
+        nativeMethodCallInvokerHolder,
+      )
+    // Now that the manager exists, let the context resolve peer modules from it
+    // instead of handing back the host's instances (see WorkerReactContext).
+    workerContext.attachModuleResolver { name -> manager.getModule(name) }
+    return manager
   }
 }
