@@ -736,7 +736,12 @@ export default function TestsScreen() {
               ? String(src).match(/^https?:\/\/[^/]+/)?.[0]
               : null;
             if (!origin) {
-              resolve({ __skipped: 'no dev-server origin (release bundle)' });
+              // NOT a pass: this is the test that proves the host JS thread is
+              // uninvolved, and silently skipping it in release/dev-client builds
+              // made a green suite mean nothing.
+              resolve({
+                __unrunnable: 'no dev-server origin (release bundle)',
+              });
               return;
             }
             const w = new Worker('../workers/netisolation', {
@@ -746,13 +751,17 @@ export default function TestsScreen() {
               w.terminate();
               resolve({ __timeout: true });
             }, 10000);
+            let blockStart = 0;
             let blockEnd = 0;
             w.onmessage = (e: any) => {
               // Worker is up and its module graph is evaluated: only now does the
               // measurement mean anything, so start the request and pin the thread.
               if (e.data?.phase === 'ready') {
                 w.postMessage({ url: `${origin}/status` });
-                const until = Date.now() + 1500;
+                blockStart = Date.now();
+                // Long enough that a slow Metro reply cannot make a WORKING
+                // implementation fail by finishing after the pin ends.
+                const until = blockStart + 3000;
                 while (Date.now() < until) {
                   // pin this thread — nothing on the host runtime can run
                 }
@@ -761,7 +770,7 @@ export default function TestsScreen() {
               }
               clearTimeout(timer);
               w.terminate();
-              resolve({ ...e.data, blockEnd });
+              resolve({ ...e.data, blockStart, blockEnd });
             };
             w.onerror = (e: any) => {
               clearTimeout(timer);
@@ -776,9 +785,11 @@ export default function TestsScreen() {
         all.push({
           name: 'worker network completes while host JS thread is blocked',
           pass:
-            netIsolation?.__skipped !== undefined ||
-            (netIsolation?.ok === true &&
-              netIsolation.completedAt < netIsolation.blockEnd),
+            netIsolation?.ok === true &&
+            // Bounded on BOTH sides: finishing before the pin started would prove
+            // nothing about the host thread being busy.
+            netIsolation.completedAt >= netIsolation.blockStart &&
+            netIsolation.completedAt < netIsolation.blockEnd,
           detail: JSON.stringify(netIsolation),
         });
 
@@ -894,7 +905,9 @@ export default function TestsScreen() {
                     // Did the worker's write land in the memory we still hold?
                     outboundZeroCopy: new Uint8Array(ab)[1] === 88,
                     // The buffer that came home must carry the worker's write.
-                    returnedByte: returned ? new Uint8Array(returned)[2] : -1,
+                    // Written by the worker AFTER it posted the buffer home, so
+                    // a copy taken at post time cannot contain it.
+                    returnedByte: returned ? new Uint8Array(returned)[3] : -1,
                     // Simulated detachment: our marker on the sent buffer.
                     senderDetached: (ab as any).detached === true,
                   });
@@ -939,8 +952,8 @@ export default function TestsScreen() {
             transferProbe?.externalHop?.sawHostByte === 7 &&
             transferProbe?.externalHop?.byteLength === 4096 &&
             // the buffer comes home carrying the worker's write
-            transferProbe?.externalHop?.returnedByte === 55 &&
-            transferProbe?.plainHop?.returnedByte === 55 &&
+            transferProbe?.externalHop?.returnedByte === 77 &&
+            transferProbe?.plainHop?.returnedByte === 77 &&
             // an external buffer transfers with no copy; a plain one cannot
             transferProbe?.externalHop?.outboundZeroCopy === true &&
             // simulated detachment is observable on both
@@ -1039,6 +1052,77 @@ export default function TestsScreen() {
             richTypes.bigValue === '9007199254740993' &&
             richTypes.cyclicSelfRef === true,
           detail: JSON.stringify(richTypes),
+        });
+
+        // Isolation rule 2, asserted directly: a worker module's events land on
+        // THAT worker and nowhere else. The existing device-event test covers the
+        // opposite (opt-in host -> worker) direction and would pass unchanged if
+        // worker-local dispatch were reverted, so it proves nothing about this.
+        //
+        // A worker's XHR emits RN networking device events. If those were still
+        // raised on the host runtime, the host listener below would see them.
+        const eventIsolation = await new Promise<any>((resolve) => {
+          try {
+            const src = NativeModules?.SourceCode?.getConstants?.().scriptURL;
+            const origin = src
+              ? String(src).match(/^https?:\/\/[^/]+/)?.[0]
+              : null;
+            if (!origin) {
+              resolve({
+                __unrunnable: 'no dev-server origin (release bundle)',
+              });
+              return;
+            }
+            // Every networking event RN emits, watched on the HOST.
+            const names = [
+              'didReceiveNetworkResponse',
+              'didReceiveNetworkData',
+              'didCompleteNetworkResponse',
+              'didReceiveNetworkIncrementalData',
+            ];
+            let hostSaw = 0;
+            const subs = names.map((n) =>
+              DeviceEventEmitter.addListener(n, () => {
+                hostSaw += 1;
+              })
+            );
+
+            const w = new Worker('../workers/netisolation', {
+              nativeModules: true,
+            });
+            const finish = (data: any) => {
+              subs.forEach((sub) => sub.remove());
+              w.terminate();
+              resolve({ ...data, hostSaw });
+            };
+            const timer = setTimeout(() => finish({ __timeout: true }), 10000);
+            w.onmessage = (e: any) => {
+              if (e.data?.phase === 'ready') {
+                w.postMessage({ url: `${origin}/status` });
+                return;
+              }
+              clearTimeout(timer);
+              // Let any stray host-side event land before counting.
+              setTimeout(() => finish(e.data), 250);
+            };
+            w.onerror = (e: any) => {
+              clearTimeout(timer);
+              finish({ __error: e.message });
+            };
+            w.postMessage({ ping: true });
+          } catch (err) {
+            resolve({ __threw: String((err as any)?.message ?? err) });
+          }
+        });
+        all.push({
+          name: 'worker module events never reach the host (isolation rule 2)',
+          pass:
+            eventIsolation?.ok === true &&
+            // the worker really did the network round trip...
+            eventIsolation.status === 200 &&
+            // ...and not one of its events was dispatched on the host runtime
+            eventIsolation.hostSaw === 0,
+          detail: JSON.stringify(eventIsolation),
         });
 
         // JSModule bridge suite (typed two-way RPC, events, SharedStore params).
