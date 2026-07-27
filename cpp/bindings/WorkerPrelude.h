@@ -240,6 +240,20 @@ constexpr const char* kWorkerPrelude = R"JS(
     g.queueMicrotask = function (cb) { Promise.resolve().then(cb); };
   }
 
+  // ---- performance ----
+  // Part of the Web Worker global scope, and RN's own code depends on it:
+  // Libraries/Network/XMLHttpRequest calls performance.now() for request timing,
+  // so without this every XHR (and therefore fetch) inside a worker throws
+  // "Property 'performance' doesn't exist". `timeOrigin` + a monotonic-ish `now()`
+  // derived from Date.now() is the honest minimum; we don't claim the entries API.
+  if (typeof g.performance !== 'object' || g.performance === null) {
+    var __timeOrigin = Date.now();
+    g.performance = {
+      timeOrigin: __timeOrigin,
+      now: function () { return Date.now() - __timeOrigin; },
+    };
+  }
+
   // importScripts is not supported (workers use bundled imports).
   g.importScripts = function () {
     throw new Error(
