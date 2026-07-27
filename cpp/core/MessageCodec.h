@@ -51,6 +51,18 @@ Message encode(
 // and used by the tests to assert the right behaviour per RN version.
 bool supportsZeroCopyTransfer();
 
+// Records the backing store of a buffer WE created (createTransferableBuffer), so
+// transferring it needs nothing from the engine.
+//
+// This is what makes zero-copy transfer work on every supported RN, not just the
+// ones whose JSI has `tryGetMutableBuffer`: for our own buffers the store is known
+// up front, and the engine is only consulted for buffers minted elsewhere. Returns
+// the id to stamp on the ArrayBuffer object.
+double registerTransferableStore(std::shared_ptr<jsi::MutableBuffer> store);
+
+// Property holding the id above. Non-enumerable; set by createTransferableBuffer.
+extern const char* const kTransferableIdProp;
+
 // Rehydrate a message into `rt`.
 jsi::Value decode(jsi::Runtime& rt, const Message& message);
 

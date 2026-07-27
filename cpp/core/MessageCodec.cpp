@@ -32,6 +32,11 @@ enum Tag : uint8_t {
   // A TRANSFERRED ArrayBuffer: an index into Message::transfers. The bytes never
   // move; the receiver wraps the sender's backing store.
   TAG_TRANSFER = 14,
+  TAG_MAP = 15,
+  TAG_SET = 16,
+  TAG_ERROR = 17,
+  TAG_REGEXP = 18,
+  TAG_BIGINT = 19,
 };
 
 class VecMutableBuffer : public MutableBuffer {
@@ -63,14 +68,40 @@ struct HasTryGetMutableBuffer<
 
 constexpr bool kCanTransfer = HasTryGetMutableBuffer<Runtime>::value;
 
-// Reaches an ArrayBuffer's backing store, or null when the engine won't share it.
+// Stores of buffers this library created. Weak: the ArrayBuffer owns its store, so
+// an entry disappearing simply means the buffer is gone.
+std::mutex& storeMutex() {
+  static std::mutex m;
+  return m;
+}
+std::unordered_map<double, std::weak_ptr<MutableBuffer>>& storeRegistry() {
+  static std::unordered_map<double, std::weak_ptr<MutableBuffer>> r;
+  return r;
+}
+
+// Reaches an ArrayBuffer's backing store, or null when it cannot be shared.
+//
+// Our own buffers are resolved from the registry FIRST, which works on every RN
+// version — `tryGetMutableBuffer` is only consulted for buffers minted elsewhere,
+// and only exists on newer JSI. Keeping our path first also means the common case
+// is identical across versions instead of quietly better on new ones.
 std::shared_ptr<MutableBuffer> tryTakeBackingStore(
     Runtime& rt,
+    const Object& obj,
     const ArrayBuffer& ab) {
+  Value id = obj.getProperty(rt, kTransferableIdProp);
+  if (id.isNumber()) {
+    std::lock_guard<std::mutex> lock(storeMutex());
+    auto& r = storeRegistry();
+    auto it = r.find(id.getNumber());
+    if (it != r.end()) {
+      if (auto alive = it->second.lock()) return alive;
+      r.erase(it);
+    }
+  }
   if constexpr (HasTryGetMutableBuffer<Runtime>::value) {
     return rt.tryGetMutableBuffer(ab);
   } else {
-    (void)rt;
     (void)ab;
     return nullptr;
   }
@@ -156,6 +187,13 @@ struct Encoder {
   uint32_t seenCount = 0;
   std::optional<Function> dateCtor;
   std::optional<Function> isViewFn;
+  std::optional<Function> mapCtor;
+  std::optional<Function> setCtor;
+  std::optional<Function> errorCtor;
+  std::optional<Function> regexpCtor;
+  // Array.from turns a Map/Set into a plain array in one call, which is far less
+  // JSI traffic than driving the iterator protocol by hand.
+  std::optional<Function> arrayFrom;
 
   explicit Encoder(Runtime& r) : rt(r) { msg.data.reserve(128); }
 
@@ -171,6 +209,13 @@ struct Encoder {
     isViewFn.emplace(rt.global()
                          .getPropertyAsObject(rt, "ArrayBuffer")
                          .getPropertyAsFunction(rt, "isView"));
+    mapCtor.emplace(rt.global().getPropertyAsFunction(rt, "Map"));
+    setCtor.emplace(rt.global().getPropertyAsFunction(rt, "Set"));
+    errorCtor.emplace(rt.global().getPropertyAsFunction(rt, "Error"));
+    regexpCtor.emplace(rt.global().getPropertyAsFunction(rt, "RegExp"));
+    arrayFrom.emplace(
+        rt.global().getPropertyAsObject(rt, "Array").getPropertyAsFunction(
+            rt, "from"));
   }
 
   // Register a container in the identity map. Ids are assigned in encounter
@@ -285,6 +330,63 @@ void encodeObject(Encoder& e, const Value& v, const Object& obj) {
     return;
   }
 
+  // Map / Set: registered BEFORE their contents so a collection containing
+  // itself round-trips instead of recursing forever.
+  if (obj.instanceOf(rt, *e.mapCtor)) {
+    e.remember(v);
+    Array entries =
+        e.arrayFrom->call(rt, v).getObject(rt).getArray(rt); // [[k, v], ...]
+    size_t n = entries.size(rt);
+    e.byte(TAG_MAP);
+    e.varuint(static_cast<uint32_t>(n));
+    for (size_t i = 0; i < n; ++i) {
+      Array pair = entries.getValueAtIndex(rt, i).getObject(rt).getArray(rt);
+      encodeValue(e, pair.getValueAtIndex(rt, 0));
+      encodeValue(e, pair.getValueAtIndex(rt, 1));
+    }
+    return;
+  }
+
+  if (obj.instanceOf(rt, *e.setCtor)) {
+    e.remember(v);
+    Array values = e.arrayFrom->call(rt, v).getObject(rt).getArray(rt);
+    size_t n = values.size(rt);
+    e.byte(TAG_SET);
+    e.varuint(static_cast<uint32_t>(n));
+    for (size_t i = 0; i < n; ++i) {
+      encodeValue(e, values.getValueAtIndex(rt, i));
+    }
+    return;
+  }
+
+  // Error: the spec clones name/message/stack (and only those). Subclasses
+  // arrive as their nearest built-in — a custom class cannot be reconstructed
+  // in a runtime that has never seen its definition.
+  if (obj.instanceOf(rt, *e.errorCtor)) {
+    e.remember(v);
+    auto strProp = [&](const char* key) -> std::string {
+      Value pv = obj.getProperty(rt, key);
+      return pv.isString() ? pv.getString(rt).utf8(rt) : std::string();
+    };
+    e.byte(TAG_ERROR);
+    e.str(strProp("name"));
+    e.str(strProp("message"));
+    e.str(strProp("stack"));
+    return;
+  }
+
+  if (obj.instanceOf(rt, *e.regexpCtor)) {
+    e.remember(v);
+    auto strProp = [&](const char* key) -> std::string {
+      Value pv = obj.getProperty(rt, key);
+      return pv.isString() ? pv.getString(rt).utf8(rt) : std::string();
+    };
+    e.byte(TAG_REGEXP);
+    e.str(strProp("source"));
+    e.str(strProp("flags"));
+    return;
+  }
+
   if (obj.instanceOf(rt, *e.dateCtor)) {
     double t = obj.getPropertyAsFunction(rt, "getTime")
                    .callWithThis(rt, obj)
@@ -341,7 +443,12 @@ void encodeValue(Encoder& e, const Value& v) {
   } else if (v.isSymbol()) {
     throw DataCloneError("Could not clone value: a symbol cannot be cloned.");
   } else if (v.isBigInt()) {
-    throw DataCloneError("Could not clone value: BigInt is not yet supported.");
+    // Carried as its decimal string: jsi has no portable accessor for the full
+    // magnitude, and BigInt(str) round-trips exactly at any size.
+    Value asString =
+        rt.global().getPropertyAsFunction(rt, "String").call(rt, Value(rt, v));
+    e.byte(TAG_BIGINT);
+    e.str(asString.getString(rt).utf8(rt));
   } else if (v.isObject()) {
     Object obj = v.getObject(rt);
     encodeObject(e, v, obj);
@@ -438,6 +545,71 @@ Value decodeValue(Decoder& d) {
       return rt.global()
           .getPropertyAsFunction(rt, ctorName.c_str())
           .callAsConstructor(rt, std::move(ab));
+    }
+    case TAG_MAP: {
+      uint32_t n = d.varuint();
+      // Constructed empty and registered BEFORE its entries, so a self-
+      // referencing Map resolves through the back-reference table.
+      Value v = rt.global().getPropertyAsFunction(rt, "Map").callAsConstructor(rt);
+      d.decoded.emplace_back(Value(rt, v));
+      Object map = v.getObject(rt);
+      Function set = map.getPropertyAsFunction(rt, "set");
+      for (uint32_t i = 0; i < n; ++i) {
+        Value key = decodeValue(d);
+        Value val = decodeValue(d);
+        set.callWithThis(rt, map, std::move(key), std::move(val));
+      }
+      return v;
+    }
+    case TAG_SET: {
+      uint32_t n = d.varuint();
+      Value v = rt.global().getPropertyAsFunction(rt, "Set").callAsConstructor(rt);
+      d.decoded.emplace_back(Value(rt, v));
+      Object set = v.getObject(rt);
+      Function add = set.getPropertyAsFunction(rt, "add");
+      for (uint32_t i = 0; i < n; ++i) {
+        add.callWithThis(rt, set, decodeValue(d));
+      }
+      return v;
+    }
+    case TAG_ERROR: {
+      std::string name = d.str();
+      std::string message = d.str();
+      std::string stack = d.str();
+      // Rebuild as the matching built-in where one exists (TypeError, RangeError,
+      // …), else a plain Error carrying the original name.
+      Value ctorVal = rt.global().getProperty(rt, name.c_str());
+      Function ctor =
+          (ctorVal.isObject() && ctorVal.asObject(rt).isFunction(rt))
+          ? ctorVal.asObject(rt).asFunction(rt)
+          : rt.global().getPropertyAsFunction(rt, "Error");
+      Value v = ctor.callAsConstructor(
+          rt, String::createFromUtf8(rt, message));
+      d.decoded.emplace_back(Value(rt, v));
+      Object err = v.getObject(rt);
+      err.setProperty(rt, "name", String::createFromUtf8(rt, name));
+      // The sender's stack is more useful than the one just synthesized here.
+      if (!stack.empty()) {
+        err.setProperty(rt, "stack", String::createFromUtf8(rt, stack));
+      }
+      return v;
+    }
+    case TAG_REGEXP: {
+      std::string source = d.str();
+      std::string flags = d.str();
+      Value v = rt.global()
+                    .getPropertyAsFunction(rt, "RegExp")
+                    .callAsConstructor(
+                        rt,
+                        String::createFromUtf8(rt, source),
+                        String::createFromUtf8(rt, flags));
+      d.decoded.emplace_back(Value(rt, v));
+      return v;
+    }
+    case TAG_BIGINT: {
+      std::string digits = d.str();
+      return rt.global().getPropertyAsFunction(rt, "BigInt").call(
+          rt, String::createFromUtf8(rt, digits));
     }
     case TAG_TRANSFER: {
       uint32_t idx = d.varuint();
@@ -605,6 +777,54 @@ void writeJson(JsonReader& r, std::string& out) {
     case TAG_STRING:
       jsonEscape(r.str(), out);
       break;
+    case TAG_BIGINT:
+      // JSON has no bigint; emit the digits as a string (JSON.stringify throws
+      // on a real bigint, so a string is the closest honest form).
+      out.push_back('"');
+      out += r.str();
+      out.push_back('"');
+      break;
+    case TAG_REGEXP:
+      r.str();
+      r.str();
+      out += "null";
+      break;
+    case TAG_ERROR: {
+      std::string name = r.str();
+      std::string message = r.str();
+      r.str(); // stack
+      out += "{\"name\":\"";
+      out += name;
+      out += "\",\"message\":\"";
+      out += message;
+      out += "\"}";
+      break;
+    }
+    case TAG_SET: {
+      uint32_t n = r.varuint();
+      out.push_back('[');
+      for (uint32_t i = 0; i < n; ++i) {
+        if (i) out.push_back(',');
+        writeJson(r, out);
+      }
+      out.push_back(']');
+      break;
+    }
+    case TAG_MAP: {
+      uint32_t n = r.varuint();
+      // Entry pairs, mirroring Array.from(map).
+      out.push_back('[');
+      for (uint32_t i = 0; i < n; ++i) {
+        if (i) out.push_back(',');
+        out.push_back('[');
+        writeJson(r, out);
+        out.push_back(',');
+        writeJson(r, out);
+        out.push_back(']');
+      }
+      out.push_back(']');
+      break;
+    }
     case TAG_ARRAY: {
       uint32_t n = r.varuint();
       out.push_back('[');
@@ -634,8 +854,26 @@ void writeJson(JsonReader& r, std::string& out) {
 
 } // namespace
 
+const char* const kTransferableIdProp = "__rnworkersBufferId";
+
 bool supportsZeroCopyTransfer() {
   return kCanTransfer;
+}
+
+double registerTransferableStore(std::shared_ptr<MutableBuffer> store) {
+  static double nextId = 1;
+  std::lock_guard<std::mutex> lock(storeMutex());
+  auto& r = storeRegistry();
+  // Opportunistic sweep: buffers are large, and a long-lived app minting many
+  // would otherwise accumulate dead entries.
+  if (r.size() > 64) {
+    for (auto it = r.begin(); it != r.end();) {
+      it = it->second.expired() ? r.erase(it) : std::next(it);
+    }
+  }
+  double id = nextId++;
+  r[id] = std::move(store);
+  return id;
 }
 
 // Builds the transfer table: for each ArrayBuffer in the list, take its backing
@@ -677,7 +915,7 @@ static TransferTable buildTransferTable(
       }
     }
 
-    auto store = tryTakeBackingStore(rt, obj.getArrayBuffer(rt));
+    auto store = tryTakeBackingStore(rt, obj, obj.getArrayBuffer(rt));
     if (store) {
       // Zero-copy: the receiver wraps this very allocation.
       msg.transfers.push_back(std::move(store));

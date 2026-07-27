@@ -951,6 +951,96 @@ export default function TestsScreen() {
           detail: JSON.stringify(transferProbe),
         });
 
+        // Structured clone coverage for the collection/error types that used to
+        // be dropped: Map, Set, Error, RegExp, BigInt — including cycles through
+        // a Map, which needs the container registered before its entries.
+        const richTypes = await new Promise<any>((resolve) => {
+          try {
+            const code = `
+              self.onmessage = function (e) {
+                var d = e.data;
+                var selfRef = d.cyclicMap.get('self') === d.cyclicMap;
+                self.postMessage({
+                  mapIsMap: d.map instanceof Map,
+                  mapGet: d.map.get('k'),
+                  mapNested: d.map.get('obj') && d.map.get('obj').n,
+                  setIsSet: d.set instanceof Set,
+                  setHas: d.set.has(2),
+                  setSize: d.set.size,
+                  errIsError: d.err instanceof Error,
+                  errName: d.err.name,
+                  errMessage: d.err.message,
+                  errHasStack: typeof d.err.stack === 'string' && d.err.stack.length > 0,
+                  typeErrIsTypeError: d.typeErr instanceof TypeError,
+                  reIsRegExp: d.re instanceof RegExp,
+                  reSource: d.re.source,
+                  reFlags: d.re.flags,
+                  reMatches: d.re.test('ABC'),
+                  bigIsBigInt: typeof d.big === 'bigint',
+                  bigValue: String(d.big),
+                  cyclicSelfRef: selfRef,
+                });
+              };
+            `;
+            const w = new Worker({ inline: code });
+            const timer = setTimeout(() => {
+              w.terminate();
+              resolve({ __timeout: true });
+            }, 4000);
+            w.onmessage = (e: any) => {
+              clearTimeout(timer);
+              w.terminate();
+              resolve(e.data);
+            };
+            w.onerror = (e: any) => {
+              clearTimeout(timer);
+              w.terminate();
+              resolve({ __error: e.message });
+            };
+
+            const map = new Map<any, any>([
+              ['k', 'v'],
+              ['obj', { n: 5 }],
+            ]);
+            const cyclicMap = new Map<any, any>();
+            cyclicMap.set('self', cyclicMap);
+            w.postMessage({
+              map,
+              cyclicMap,
+              set: new Set([1, 2, 3]),
+              err: new Error('boom'),
+              typeErr: new TypeError('bad type'),
+              re: /a(b)c/gi,
+              big: BigInt('9007199254740993'), // > Number.MAX_SAFE_INTEGER
+            });
+          } catch (err) {
+            resolve({ __threw: String((err as any)?.message ?? err) });
+          }
+        });
+        all.push({
+          name: 'structured clone: Map/Set/Error/RegExp/BigInt (+ cycles)',
+          pass:
+            richTypes?.mapIsMap === true &&
+            richTypes.mapGet === 'v' &&
+            richTypes.mapNested === 5 &&
+            richTypes.setIsSet === true &&
+            richTypes.setHas === true &&
+            richTypes.setSize === 3 &&
+            richTypes.errIsError === true &&
+            richTypes.errName === 'Error' &&
+            richTypes.errMessage === 'boom' &&
+            richTypes.errHasStack === true &&
+            richTypes.typeErrIsTypeError === true &&
+            richTypes.reIsRegExp === true &&
+            richTypes.reSource === 'a(b)c' &&
+            richTypes.reFlags === 'gi' &&
+            richTypes.reMatches === true &&
+            richTypes.bigIsBigInt === true &&
+            richTypes.bigValue === '9007199254740993' &&
+            richTypes.cyclicSelfRef === true,
+          detail: JSON.stringify(richTypes),
+        });
+
         // JSModule bridge suite (typed two-way RPC, events, SharedStore params).
         const bridge = await runBridgeTests();
         all.push(...bridge);

@@ -179,7 +179,27 @@ void installStructuredClone(Runtime& rt) {
         }
         auto bytes = std::make_shared<std::vector<uint8_t>>(
             static_cast<size_t>(len), 0);
-        return Value(ArrayBuffer(rt, std::make_shared<VecBuffer>(bytes)));
+        auto store = std::make_shared<VecBuffer>(bytes);
+        // Remember the store and stamp its id on the object, so transferring this
+        // buffer needs nothing from the engine — that is what makes zero-copy
+        // transfer work on every supported RN, not only those whose JSI has
+        // tryGetMutableBuffer.
+        double id = registerTransferableStore(store);
+        Object ab = ArrayBuffer(rt, std::move(store));
+        Object objectCtor = rt.global().getPropertyAsObject(rt, "Object");
+        Function defineProperty =
+            objectCtor.getPropertyAsFunction(rt, "defineProperty");
+        Object descriptor(rt);
+        descriptor.setProperty(rt, "value", Value(id));
+        descriptor.setProperty(rt, "enumerable", Value(false));
+        descriptor.setProperty(rt, "writable", Value(false));
+        descriptor.setProperty(rt, "configurable", Value(false));
+        defineProperty.call(
+            rt,
+            Value(rt, ab),
+            String::createFromAscii(rt, kTransferableIdProp),
+            std::move(descriptor));
+        return Value(std::move(ab));
       });
 
   // `ArrayBuffer.prototype.detached` is a real spec getter, and the only part of
