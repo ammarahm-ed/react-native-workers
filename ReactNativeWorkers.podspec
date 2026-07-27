@@ -14,6 +14,27 @@ rescue StandardError
   false
 end
 
+# Expo SDK 55 moved the ObjC JSI headers (EXJavaScriptRuntime/Object/Value,
+# EXJSIConversions, EXJSIUtils, JSIUtils) out of ExpoModulesCore and into a
+# sibling `ExpoModulesJSI` pod — ExpoModulesCore.podspec now does
+# `exclude_files: ['ios/JSI', …]`. Depend on that pod when it exists so
+# <ExpoModulesJSI/...> is on the header search path; SDK 54 has no such pod and
+# keeps its <ExpoModulesCore/...> imports. The podspec ships INSIDE
+# expo-modules-core on SDK 55, and as its own `expo-modules-jsi` package later.
+expo_modules_jsi_standalone = begin
+  !`node --print "require.resolve('expo-modules-jsi/package.json')" 2>/dev/null`.strip.empty?
+rescue StandardError
+  false
+end
+
+expo_modules_jsi_available = begin
+  core = `node --print "require.resolve('expo-modules-core/package.json')" 2>/dev/null`.strip
+  in_core = !core.empty? && File.exist?(File.join(File.dirname(core), "ExpoModulesJSI.podspec"))
+  in_core || expo_modules_jsi_standalone
+rescue StandardError
+  false
+end
+
 Pod::Spec.new do |s|
   s.name         = "ReactNativeWorkers"
   s.version      = package["version"]
@@ -48,10 +69,25 @@ Pod::Spec.new do |s|
     # the public bridge header let the Swift module call into the ObjC++ bridge.
     source_files << "ios/**/*.swift"
     s.dependency "ExpoModulesCore"
+    # SDK 55+: the ObjC JSI headers live here (see the detection above).
+    s.dependency "ExpoModulesJSI" if expo_modules_jsi_available
     s.public_header_files = "ios/RNWorkersExpoBridge.h"
+    # `canImport(ExpoModulesJSI)` cannot tell SDK 55 from 56+: 55 bundles that pod
+    # inside expo-modules-core with the OLD ObjC-backed API, while 56+ ships it as
+    # its own package with the Swift rewrite. Only the standalone package has the
+    # `withUnsafePointee` surface RNWorkersExpoJSI.swift needs, so gate that file
+    # on a flag resolved here — the same version-selection idea android/build.gradle
+    # uses to pick an RN source set.
+    expo_swift_jsi_flags = expo_modules_jsi_standalone ? " RNWORKERS_EXPO_SWIFT_JSI" : ""
+    # The same switch is needed by BOTH languages: Swift gates RNWorkersExpoJSI.swift,
+    # ObjC++ gates WorkerExpoModulesSwiftJSI.mm (the SDK 56+ installer).
+    expo_swift_jsi_define =
+      expo_modules_jsi_standalone ? " RNWORKERS_EXPO_SWIFT_JSI=1" : ""
     s.pod_target_xcconfig = debugger_xcconfig.merge({
       "DEFINES_MODULE" => "YES",
       "SWIFT_VERSION" => "5.0",
+      "SWIFT_ACTIVE_COMPILATION_CONDITIONS" => "$(inherited)#{expo_swift_jsi_flags}",
+      "GCC_PREPROCESSOR_DEFINITIONS" => "$(inherited)#{expo_swift_jsi_define}",
     })
   else
     s.private_header_files = "ios/**/*.h"

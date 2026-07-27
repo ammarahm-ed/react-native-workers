@@ -14,6 +14,11 @@ public class RNWorkersExpoModule: Module {
     OnCreate {
       // `appContext` is this module's AppContext — the app's running context.
       RNWorkersExpoBridge.registerAppContext(self.appContext)
+      #if RNWORKERS_EXPO_SWIFT_JSI
+      // SDK 56+: the installer reaches Expo's JSI through Swift (see
+      // RNWorkersExpoJSI) because the ObjC JSI classes no longer exist.
+      RNWorkersExpoJSI.setAppContext(self.appContext)
+      #endif
     }
   }
 }

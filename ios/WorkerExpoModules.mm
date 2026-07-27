@@ -20,7 +20,29 @@
 
 #import <Foundation/Foundation.h>
 
-#if __has_include(<ExpoModulesCore/EXJSIInstaller.h>)
+// Outside the availability guard: RNWorkersExpoBridge is implemented at the
+// bottom of this file on every SDK (see the note there).
+#import "RNWorkersExpoBridge.h"
+
+// Where Expo keeps its ObjC JSI headers moved in SDK 55: `ExpoModulesCore.podspec`
+// gained `exclude_files: ['ios/JSI', …]` and a sibling `ExpoModulesJSI` pod took
+// them over with `header_dir = 'ExpoModulesJSI'`. Same classes, same API — only
+// the umbrella changed. So probe both umbrellas instead of hard-coding one:
+//
+//   SDK 54  -> <ExpoModulesCore/EXJavaScript*.h>
+//   SDK 55  -> <ExpoModulesJSI/EXJavaScript*.h>
+//   SDK 56+ -> neither; the ObjC classes were rewritten in Swift (see below)
+//
+// EXJSIInstaller.h and EventEmitter.h live in `ios/JS` and `common/cpp`, which
+// ExpoModulesCore still owns on every SDK, so they are imported unconditionally.
+#if __has_include(<ExpoModulesCore/EXJavaScriptRuntime.h>)
+#define RNWORKERS_EXPO_JSI_IN_CORE 1
+#elif __has_include(<ExpoModulesJSI/EXJavaScriptRuntime.h>)
+#define RNWORKERS_EXPO_JSI_IN_JSI_POD 1
+#endif
+
+#if __has_include(<ExpoModulesCore/EXJSIInstaller.h>) && \
+    (defined(RNWORKERS_EXPO_JSI_IN_CORE) || defined(RNWORKERS_EXPO_JSI_IN_JSI_POD))
 
 #define RNWORKERS_HAS_EXPO_MODULES 1
 
@@ -30,13 +52,22 @@
 // Public ObjC JSI headers (Expo apps only). These let us touch the MAIN runtime
 // and a module's main-runtime JS object without importing Expo's Swift-generated
 // header and without @testable — used only for the event bridge and live props.
+#ifdef RNWORKERS_EXPO_JSI_IN_CORE
 #import <ExpoModulesCore/EXJavaScriptRuntime.h>
 #import <ExpoModulesCore/EXJavaScriptObject.h>
 #import <ExpoModulesCore/EXJavaScriptValue.h>
 #import <ExpoModulesCore/EXJSIConversions.h>
 #import <ExpoModulesCore/EXJSIUtils.h>
-#import <ExpoModulesCore/EventEmitter.h>
 #import <ExpoModulesCore/JSIUtils.h>
+#else
+#import <ExpoModulesJSI/EXJavaScriptRuntime.h>
+#import <ExpoModulesJSI/EXJavaScriptObject.h>
+#import <ExpoModulesJSI/EXJavaScriptValue.h>
+#import <ExpoModulesJSI/EXJSIConversions.h>
+#import <ExpoModulesJSI/EXJSIUtils.h>
+#import <ExpoModulesJSI/JSIUtils.h>
+#endif
+#import <ExpoModulesCore/EventEmitter.h>
 
 #import <atomic>
 #import <chrono>
@@ -689,16 +720,45 @@ __attribute__((constructor)) static void registerInstaller() {
 
 } // namespace
 
+// Store the context for the installer compiled above.
+static void RNWorkersStoreExpoAppContext(id appContext) {
+  gAppContext = (id<RNWExpoAppContext>)appContext;
+}
+
+#else
+
+// No ObjC Expo JSI surface here: either a bare React Native app (no
+// ExpoModulesCore), or an Expo SDK whose JSI classes moved to Swift (56+). In
+// the latter case the installer reaches Expo through RNWorkersExpoJSI.swift, so
+// there is nothing for this file to store.
+static void RNWorkersStoreExpoAppContext(id appContext) {
+  (void)appContext;
+}
+
+#endif // Expo ObjC JSI availability
+
+// Defined unconditionally, OUTSIDE the guard above. The podspec compiles the
+// companion Swift module (RNWorkersExpoModule.swift) whenever expo-modules-core
+// resolves, and its OnCreate calls +registerAppContext: on every SDK — so
+// compiling this class away leaves an undefined symbol at link time instead of a
+// clean no-op. The class always exists; only what it does with the context
+// varies by SDK.
+#if defined(RNWORKERS_EXPO_SWIFT_JSI) && !defined(RNWORKERS_HAS_EXPO_MODULES)
+// SDK 56+ installer, in WorkerExpoModulesSwiftJSI.mm. Declared and called here on
+// purpose: that file holds nothing the app references, so as part of a static
+// archive its object file — and any static initializer in it — would be dropped
+// by the linker. This call is its anchor. RNWorkersExpoBridge is referenced from
+// Swift, so THIS translation unit is always linked.
+extern "C" void RNWorkersRegisterExpoSwiftJSIInstaller(void);
+#endif
+
 @implementation RNWorkersExpoBridge
 + (void)registerAppContext:(id)appContext {
   NSLog(@"[RNWorkerExpo] registerAppContext: %@ (companion Expo module OnCreate ran)",
         appContext ? @"present" : @"NIL");
-  gAppContext = (id<RNWExpoAppContext>)appContext;
+  RNWorkersStoreExpoAppContext(appContext);
+#if defined(RNWORKERS_EXPO_SWIFT_JSI) && !defined(RNWORKERS_HAS_EXPO_MODULES)
+  RNWorkersRegisterExpoSwiftJSIInstaller();
+#endif
 }
 @end
-
-#else
-
-// ExpoModulesCore not present — bare React Native. Nothing to install.
-
-#endif // __has_include ExpoModulesCore
