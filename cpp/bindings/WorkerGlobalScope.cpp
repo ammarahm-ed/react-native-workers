@@ -155,6 +155,94 @@ void installWorkerGlobalScope(Runtime& rt, WorkerHooks hooks) {
   installStructuredClone(rt);
 }
 
+// JS installed into BOTH the host and every worker: makes a transferred
+// ArrayBuffer behave like a detached one as far as the engine lets us.
+//
+// Why this is not just `ArrayBuffer.prototype`: data access never goes through
+// that prototype. `new Uint8Array(ab)` reads the buffer's internal slot and
+// `view[0]` touches neither the prototype nor any interceptable property, so a
+// throwing byteLength getter is cosmetic. The VIEW CONSTRUCTORS are the real
+// chokepoint — every read or write of transferred memory starts by wrapping the
+// buffer in a view, and that we can refuse.
+//
+// What this does NOT catch, and is documented rather than implied: a view
+// created BEFORE the transfer keeps working. Its internal slot already points at
+// the store, and JSI gives us no way to detach it. So this closes the common
+// accident (`postMessage(buf, [buf])` then touching `buf` again) but is not a
+// memory-safety guarantee. It cannot crash either way — the store is refcounted
+// and outlives both sides — the risk is a data race, not a dangling pointer.
+constexpr const char* kTransferGuard = R"JS(
+(function () {
+  var g = globalThis;
+  if (g.__rnworkersTransferGuardInstalled) return;
+  g.__rnworkersTransferGuardInstalled = true;
+
+  var MARK = '__rnworkersTransferred';
+  function transferred(b) {
+    return !!(b && typeof b === 'object' && b[MARK] === true);
+  }
+  function refuse(what) {
+    throw new TypeError(
+      'Cannot ' + what + ' a transferred ArrayBuffer: ownership moved to the ' +
+      'receiving thread when it was passed in a postMessage transfer list.'
+    );
+  }
+
+  var proto = g.ArrayBuffer && g.ArrayBuffer.prototype;
+  if (proto) {
+    // Report 0 like a detached buffer. Observable to user code even though the
+    // engine's internal slot is unchanged.
+    var d = Object.getOwnPropertyDescriptor(proto, 'byteLength');
+    if (d && typeof d.get === 'function') {
+      var nativeByteLength = d.get;
+      Object.defineProperty(proto, 'byteLength', {
+        configurable: true,
+        enumerable: false,
+        get: function () {
+          return transferred(this) ? 0 : nativeByteLength.call(this);
+        },
+      });
+    }
+    if (typeof proto.slice === 'function') {
+      var nativeSlice = proto.slice;
+      proto.slice = function () {
+        if (transferred(this)) refuse('slice');
+        return nativeSlice.apply(this, arguments);
+      };
+    }
+  }
+
+  // The chokepoint: refuse to build a view over transferred memory.
+  var VIEWS = [
+    'Uint8Array', 'Int8Array', 'Uint8ClampedArray',
+    'Int16Array', 'Uint16Array', 'Int32Array', 'Uint32Array',
+    'Float32Array', 'Float64Array', 'BigInt64Array', 'BigUint64Array',
+    'DataView',
+  ];
+  VIEWS.forEach(function (name) {
+    var Native = g[name];
+    if (typeof Native !== 'function') return;
+    function Guarded(buffer) {
+      if (transferred(buffer)) refuse('create a view on');
+      // Reflect.construct keeps subclassing and new.target intact.
+      return Reflect.construct(Native, arguments, new.target || Guarded);
+    }
+    // Same prototype, so `instanceof` and every method keep working.
+    Guarded.prototype = Native.prototype;
+    Object.getOwnPropertyNames(Native).forEach(function (key) {
+      if (key === 'prototype' || key === 'length' || key === 'name') return;
+      try {
+        Guarded[key] = Native[key];
+      } catch (e) {
+        // read-only static: nothing to carry over
+      }
+    });
+    Object.defineProperty(Guarded, 'name', { value: name, configurable: true });
+    g[name] = Guarded;
+  });
+})();
+)JS";
+
 void installStructuredClone(Runtime& rt) {
   // An ArrayBuffer whose backing store WE own.
   //
@@ -213,6 +301,17 @@ void installStructuredClone(Runtime& rt) {
       rt,
       "__rnworkersZeroCopyTransfer",
       Value(supportsZeroCopyTransfer()));
+
+  // Make use-after-transfer fail loudly instead of racing the new owner.
+  try {
+    rt.evaluateJavaScript(
+        std::make_shared<const StringBuffer>(kTransferGuard),
+        "rnworkers-transfer-guard.js");
+  } catch (const std::exception& e) {
+    // Never fatal: without the guard, transfer is exactly as safe as it was
+    // before — the message path itself already rejects a transferred buffer.
+    (void)e;
+  }
 
   // `ArrayBuffer.prototype.detached` is a real spec getter, and the only part of
   // detachment we can honour: transfer marks the buffer (MessageCodec.cpp) and

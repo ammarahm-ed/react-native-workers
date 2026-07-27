@@ -1166,6 +1166,89 @@ export default function TestsScreen() {
           detail: JSON.stringify(perf),
         });
 
+        // Use-after-transfer must fail loudly rather than race the new owner.
+        // Also pins the KNOWN hole: a view made before the transfer keeps
+        // working, because JSI cannot detach it.
+        const afterTransfer = await new Promise<any>((resolve) => {
+          try {
+            const mk = (globalThis as any).createTransferableBuffer;
+            const ab: ArrayBuffer = mk ? mk(1024) : new ArrayBuffer(1024);
+            const viewMadeBefore = new Uint8Array(ab);
+            viewMadeBefore[0] = 5;
+
+            const w = new Worker({
+              inline: 'self.onmessage = function () { self.postMessage(1); };',
+            });
+            const timer = setTimeout(() => {
+              w.terminate();
+              resolve({ __timeout: true });
+            }, 4000);
+            w.onmessage = () => {
+              clearTimeout(timer);
+              w.terminate();
+              const out: any = {};
+
+              out.detached = (ab as any).detached === true;
+              out.byteLengthZero = ab.byteLength === 0;
+
+              try {
+                // eslint-disable-next-line no-new
+                new Uint8Array(ab);
+                out.newViewThrew = false;
+              } catch {
+                out.newViewThrew = true;
+              }
+              try {
+                // eslint-disable-next-line no-new
+                new DataView(ab);
+                out.dataViewThrew = false;
+              } catch {
+                out.dataViewThrew = true;
+              }
+              try {
+                ab.slice(0, 8);
+                out.sliceThrew = false;
+              } catch {
+                out.sliceThrew = true;
+              }
+              try {
+                (globalThis as any).structuredClone({ ab });
+                out.cloneThrew = false;
+              } catch {
+                out.cloneThrew = true;
+              }
+              // Documented residual hole, asserted so it cannot change silently.
+              out.staleViewStillReads = viewMadeBefore[0] === 5;
+              // Untouched buffers must be unaffected by the guard.
+              const other = new ArrayBuffer(8);
+              out.normalBufferOk = new Uint8Array(other).length === 8;
+              resolve(out);
+            };
+            w.onerror = (e: any) => {
+              clearTimeout(timer);
+              w.terminate();
+              resolve({ __error: e.message });
+            };
+            w.postMessage({ ab }, [ab]);
+          } catch (err) {
+            resolve({ __threw: String((err as any)?.message ?? err) });
+          }
+        });
+        all.push({
+          name: 'transferred ArrayBuffer refuses new access on the sender',
+          pass:
+            afterTransfer?.detached === true &&
+            afterTransfer.byteLengthZero === true &&
+            afterTransfer.newViewThrew === true &&
+            afterTransfer.dataViewThrew === true &&
+            afterTransfer.sliceThrew === true &&
+            afterTransfer.cloneThrew === true &&
+            // known limitation, not a pass-by-accident
+            afterTransfer.staleViewStillReads === true &&
+            afterTransfer.normalBufferOk === true,
+          detail: JSON.stringify(afterTransfer),
+        });
+
         // JSModule bridge suite (typed two-way RPC, events, SharedStore params).
         const bridge = await runBridgeTests();
         all.push(...bridge);
