@@ -158,6 +158,30 @@ bool ReactNativeWorkersImpl::install(jsi::Runtime& rt) {
   return true;
 }
 
+namespace {
+
+// Logs on the host's console. Used where a message is being dropped: silence
+// there is indistinguishable from "no message was sent".
+void reportHostDeliveryFailure(Runtime& rt, const std::string& what) {
+  try {
+    Value consoleVal = rt.global().getProperty(rt, "console");
+    if (!consoleVal.isObject()) return;
+    Object console = consoleVal.getObject(rt);
+    Value errorVal = console.getProperty(rt, "error");
+    if (!errorVal.isObject() || !errorVal.getObject(rt).isFunction(rt)) return;
+    errorVal.getObject(rt).getFunction(rt).call(
+        rt,
+        String::createFromUtf8(
+            rt,
+            "[RNWorkers] dropped a message the host could not deserialize: " +
+                what));
+  } catch (...) {
+    // Reporting must never itself throw into the delivery path.
+  }
+}
+
+} // namespace
+
 void ReactNativeWorkersImpl::installDeviceEventBridge(Runtime& rt) {
   // Wrap global.__rctDeviceEventEmitter.emit (installed by RN core before app
   // code) so every host device event is also forwarded to opted-in workers. Cheap
@@ -459,7 +483,23 @@ void ReactNativeWorkersImpl::deliverMessage(
             Value(static_cast<double>(connId)),
             String::createFromUtf8(rt, "message"),
             std::move(v));
+      } catch (const std::exception& e) {
+        // A payload the HOST runtime cannot rebuild (an unknown TypedArray
+        // subclass name, an Error whose `name` is not a constructible global)
+        // used to vanish here: no message, no messageerror, no log. The
+        // worker-side path already dispatches messageerror; match it, and say
+        // why so the failure is diagnosable.
+        reportHostDeliveryFailure(rt, e.what());
+        try {
+          fn.call(
+              rt,
+              Value(static_cast<double>(connId)),
+              String::createFromUtf8(rt, "messageerror"),
+              Value::undefined());
+        } catch (...) {
+        }
       } catch (...) {
+        reportHostDeliveryFailure(rt, "unknown error");
       }
     }
   });

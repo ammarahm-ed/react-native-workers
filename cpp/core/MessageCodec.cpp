@@ -1,5 +1,9 @@
 #include "MessageCodec.h"
 
+#include <mutex>
+#include <type_traits>
+#include <unordered_map>
+
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -37,6 +41,9 @@ enum Tag : uint8_t {
   TAG_ERROR = 17,
   TAG_REGEXP = 18,
   TAG_BIGINT = 19,
+  // A TypedArray whose BUFFER was transferred: the view is rebuilt over the
+  // sender's backing store instead of over a copy of the bytes.
+  TAG_TYPEDARRAY_TRANSFER = 20,
 };
 
 class VecMutableBuffer : public MutableBuffer {
@@ -333,7 +340,24 @@ void encodeObject(Encoder& e, const Value& v, const Object& obj) {
         static_cast<size_t>(obj.getProperty(rt, "byteOffset").asNumber());
     size_t byteLength =
         static_cast<size_t>(obj.getProperty(rt, "byteLength").asNumber());
-    ArrayBuffer ab = obj.getPropertyAsObject(rt, "buffer").getArrayBuffer(rt);
+    Object bufferObj = obj.getPropertyAsObject(rt, "buffer");
+
+    // `postMessage(view, [view.buffer])` is THE canonical web idiom, and the
+    // transfer table was only consulted for a bare ArrayBuffer — so this copied
+    // the bytes while still marking the caller's buffer detached. Look the
+    // buffer up here too and rebuild the view over the transferred store.
+    if (e.transfers) {
+      if (auto index = e.transfers->find(rt, bufferObj)) {
+        e.byte(TAG_TYPEDARRAY_TRANSFER);
+        e.str(ctorName);
+        e.varuint(*index);
+        e.varuint(static_cast<uint32_t>(byteOffset));
+        e.varuint(static_cast<uint32_t>(byteLength));
+        return;
+      }
+    }
+
+    ArrayBuffer ab = bufferObj.getArrayBuffer(rt);
     e.byte(TAG_TYPEDARRAY);
     e.str(ctorName);
     e.varuint(e.addBlob(ab.data(rt) + byteOffset, byteLength));
@@ -621,6 +645,28 @@ Value decodeValue(Decoder& d) {
       return rt.global().getPropertyAsFunction(rt, "BigInt").call(
           rt, String::createFromUtf8(rt, digits));
     }
+    case TAG_TYPEDARRAY_TRANSFER: {
+      std::string ctorName = d.str();
+      uint32_t idx = d.varuint();
+      uint32_t byteOffset = d.varuint();
+      uint32_t byteLength = d.varuint();
+      if (idx >= d.msg.transfers.size()) throw DataCloneError("bad transfer index");
+      ArrayBuffer ab(rt, d.msg.transfers[idx]);
+      Function ctor = rt.global().getPropertyAsFunction(rt, ctorName.c_str());
+      // Element count, not byte count: the view's constructor takes a length in
+      // elements, which BYTES_PER_ELEMENT on the constructor gives us without
+      // hard-coding a table of the typed-array widths.
+      double bytesPerElement =
+          ctor.getProperty(rt, "BYTES_PER_ELEMENT").isNumber()
+          ? ctor.getProperty(rt, "BYTES_PER_ELEMENT").getNumber()
+          : 1;
+      if (bytesPerElement <= 0) bytesPerElement = 1;
+      return ctor.callAsConstructor(
+          rt,
+          std::move(ab),
+          Value(static_cast<double>(byteOffset)),
+          Value(static_cast<double>(byteLength) / bytesPerElement));
+    }
     case TAG_TRANSFER: {
       uint32_t idx = d.varuint();
       if (idx >= d.msg.transfers.size()) throw DataCloneError("bad transfer index");
@@ -755,6 +801,7 @@ void writeJson(JsonReader& r, std::string& out) {
     case TAG_TYPEDARRAY:
     case TAG_TRANSFER:
     case TAG_SHAREDBUFFER:
+    case TAG_TYPEDARRAY_TRANSFER:
       // Binary has no JSON form, but every payload must still be CONSUMED here:
       // this reader walks the same byte stream as the decoder, so skipping a
       // field would mis-parse everything after it.
@@ -763,6 +810,12 @@ void writeJson(JsonReader& r, std::string& out) {
       }
       if (tag == TAG_TYPEDARRAY) { r.str(); r.varuint(); }
       if (tag == TAG_SHAREDBUFFER) { r.str(); r.varuint(); }
+      if (tag == TAG_TYPEDARRAY_TRANSFER) {
+        r.str();
+        r.varuint();
+        r.varuint();
+        r.varuint();
+      }
       out += "null";
       break;
     case TAG_FALSE: out += "false"; break;

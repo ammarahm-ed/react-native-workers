@@ -202,6 +202,18 @@ void installStructuredClone(Runtime& rt) {
         return Value(std::move(ab));
       });
 
+  // Whether THIS build can transfer a foreign buffer without copying, i.e.
+  // whether the JSI it compiled against has tryGetMutableBuffer (RN 0.86+).
+  //
+  // Exposed because otherwise a silent copy is indistinguishable from a real
+  // transfer from JS: the header claimed tests used this, and nothing did.
+  // Buffers from createTransferableBuffer are zero-copy regardless — their store
+  // comes from our own registry — so this only describes the foreign-buffer case.
+  rt.global().setProperty(
+      rt,
+      "__rnworkersZeroCopyTransfer",
+      Value(supportsZeroCopyTransfer()));
+
   // `ArrayBuffer.prototype.detached` is a real spec getter, and the only part of
   // detachment we can honour: transfer marks the buffer (MessageCodec.cpp) and
   // this reports it. Reads are NOT blocked — the engine still sees live memory —

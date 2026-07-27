@@ -32,6 +32,14 @@ declare const fetch: any;
 function ensureInstalled(): void {
   if (installed) return;
   NativeReactNativeWorkers.install();
+  // The message codec rebuilds an incoming SharedBuffer through the global
+  // constructor. Setting it here — on the path every Worker takes — rather than
+  // relying on SharedBuffer.native.ts having been imported means a host that
+  // never touched SharedBuffer still receives a real one instead of a bare
+  // ArrayBuffer.
+  if (globalThis.SharedBuffer == null) {
+    globalThis.SharedBuffer = require('./SharedBuffer').SharedBuffer;
+  }
   // Native delivers worker -> host events by invoking this global on the host
   // JS thread (via the host CallInvoker). Payload is already deserialized.
   globalThis.__rnworkersDeliver = (id: number, type: string, payload: any) => {

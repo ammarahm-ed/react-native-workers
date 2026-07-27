@@ -72,4 +72,9 @@ export class SharedBuffer {
 // The message codec rebuilds an incoming SharedBuffer through this constructor,
 // so a buffer posted from a worker arrives on the host as a real SharedBuffer —
 // same API, same memory. Workers get theirs from the prelude.
+//
+// Assigned here AND from `install()` (src/index.tsx), because a module-scope side
+// effect only runs if something imported this file: a deep import of another entry
+// point would leave the global unset, and the codec would silently hand the host a
+// bare ArrayBuffer with no withLock and no name.
 globalThis.SharedBuffer = globalThis.SharedBuffer ?? SharedBuffer;
