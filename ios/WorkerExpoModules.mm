@@ -49,6 +49,8 @@
 #import <ReactCommon/CallInvoker.h>
 #import <jsi/jsi.h>
 
+#include <optional>
+
 // Public ObjC JSI headers (Expo apps only). These let us touch the MAIN runtime
 // and a module's main-runtime JS object without importing Expo's Swift-generated
 // header and without @testable — used only for the event bridge and live props.
@@ -111,6 +113,14 @@ using facebook::react::CallInvoker;
 
 // The AppContext, captured by the companion Expo module (weak — a host reload
 // tears it down).
+// Informal protocol for the Swift factory — same reason as RNWExpoAppContext: no
+// Swift-generated header, which a dependent static-lib pod cannot import.
+@protocol RNWExpoWorkerContext <NSObject>
++ (nullable id)createWithRuntime:(nonnull id)runtime;
+- (BOOL)hasModules;
+- (void)invalidate;
+@end
+
 static __weak id<RNWExpoAppContext> gAppContext = nil;
 
 namespace {
@@ -707,13 +717,97 @@ bool installExpoIntoWorker(jsi::Runtime &rt, std::shared_ptr<CallInvoker> invoke
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// A REAL per-worker AppContext (preferred path).
+//
+// Everything above forwards to the app's single AppContext, whose module objects
+// live on the MAIN runtime — so events have to be bridged from there and property
+// reads block the worker on the main JS thread. Both break the isolation rules.
+//
+// Expo can simply be installed into the worker runtime instead: build an
+// `EXJavaScriptRuntime` around the worker's runtime + CallInvoker, hand it to the
+// Swift factory (RNWorkersExpoWorkerContext), and Expo's own `prepareRuntime()`
+// installs `global.expo` and the modules host object against the WORKER runtime.
+// The worker then gets its own module instances, with functions, events and
+// properties all running natively on its own thread.
+//
+// The runtime object is built here rather than in Swift because
+// `initWithRuntime:callInvoker:` is inside `#ifdef __cplusplus`.
+// ---------------------------------------------------------------------------
+
+// Returns a teardown thunk on success, or nullopt when this SDK/app cannot build a
+// per-worker context (caller falls back to the forwarding installer).
+static std::optional<std::function<void()>> installRealExpoWorkerContext(
+    jsi::Runtime &rt,
+    const std::shared_ptr<CallInvoker> &invoker)
+{
+  Class factory = NSClassFromString(@"RNWorkersExpoWorkerContext");
+  if (factory == Nil || ![factory respondsToSelector:@selector(createWithRuntime:)]) {
+    return std::nullopt;
+  }
+
+  // A runtime object bound to THIS worker. Expo only ever schedules through the
+  // call invoker it was given, so all of its work stays on the worker thread.
+  // MUST be Expo's `ExpoRuntime`, not the base `EXJavaScriptRuntime`.
+  //
+  // `AppContext._runtime` is typed `ExpoRuntime?` — a FINAL Swift subclass
+  // (`@objc(EXRuntime) public final class ExpoRuntime: JavaScriptRuntime`) — so a
+  // base-class instance fails the Swift-side cast every time and can never pass
+  // it. The subclass is also semantically required: `initializeCoreObject`, which
+  // installs `global.expo`, is declared on it and is `internal`.
+  //
+  // Allocated by name because ExpoModulesCore ships no ObjC header for the Swift
+  // subclass; it declares no designated initializer, so it inherits
+  // `initWithRuntime:callInvoker:` from the base. An SDK without `EXRuntime` falls
+  // back to the forwarding installer rather than failing.
+  Class expoRuntimeClass = NSClassFromString(@"EXRuntime");
+  if (expoRuntimeClass == Nil) {
+    NSLog(@"[RNWorkerExpo] EXRuntime class absent on this SDK -> forwarding installer");
+    return std::nullopt;
+  }
+  EXJavaScriptRuntime *workerRuntime =
+      [[expoRuntimeClass alloc] initWithRuntime:&rt callInvoker:invoker];
+  if (!workerRuntime) {
+    return std::nullopt;
+  }
+
+  id<RNWExpoWorkerContext> context =
+      [(id<RNWExpoWorkerContext>)factory createWithRuntime:workerRuntime];
+  if (!context) {
+    NSLog(@"[RNWorkerExpo] per-worker AppContext unavailable on this SDK -> "
+          @"falling back to the forwarding installer");
+    return std::nullopt;
+  }
+  if (![context hasModules]) {
+    // An empty registry means the app's generated provider didn't resolve; the
+    // forwarding path reaches the app's real modules, so prefer it.
+    [context invalidate];
+    NSLog(@"[RNWorkerExpo] per-worker AppContext has no modules -> falling back");
+    return std::nullopt;
+  }
+
+  NSLog(@"[RNWorkerExpo] per-worker AppContext installed (native, worker-owned)");
+  // Runs on the worker thread with the runtime still alive (Worker.cpp's
+  // setPreDestroy), which is required: unsetting the runtime is what releases
+  // Expo's JS objects for this context.
+  return std::function<void()>([context, workerRuntime]() {
+    [context invalidate];
+    (void)workerRuntime;
+  });
+}
+
 __attribute__((constructor)) static void registerInstaller() {
   facebook::react::workers::setExpoModulesInstaller(
       [](jsi::Runtime &rt,
          std::shared_ptr<CallInvoker> invoker) -> std::function<void()> {
+        // Preferred: Expo running natively inside the worker, isolated from the
+        // app's context. Falls back to the forwarding shim where that isn't
+        // reachable (older/newer SDK surfaces), so no app loses Expo support.
+        if (auto teardown = installRealExpoWorkerContext(rt, invoker)) {
+          return *teardown;
+        }
         installExpoIntoWorker(rt, std::move(invoker));
-        // The iOS shim forwards to the app's shared AppContext and holds no
-        // per-worker native state, so there is nothing to tear down.
+        // The forwarding shim holds no per-worker native state.
         return {};
       });
 }
