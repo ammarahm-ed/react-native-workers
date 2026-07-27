@@ -781,6 +781,46 @@ export default function TestsScreen() {
           detail: JSON.stringify(netIsolation),
         });
 
+        // Isolation rule: a native module's method body must not run on the
+        // worker's JS thread. The worker measures the synchronous slice of a heavy
+        // native call — the window its event loop is unavailable — and it must be a
+        // small fraction of the work.
+        {
+          const nativeQueue = await new Promise<any>((resolve) => {
+            try {
+              const w = new Worker('../workers/nativequeue', {
+                nativeModules: true,
+              });
+              const timer = setTimeout(() => {
+                w.terminate();
+                resolve({ __timeout: true });
+              }, 20000);
+              w.onmessage = (e: any) => {
+                clearTimeout(timer);
+                w.terminate();
+                resolve(e.data);
+              };
+              w.onerror = (e: any) => {
+                clearTimeout(timer);
+                w.terminate();
+                resolve({ __error: e.message });
+              };
+              w.postMessage('go');
+            } catch (err) {
+              resolve({ __threw: String((err as any)?.message ?? err) });
+            }
+          });
+          all.push({
+            name: 'native module body runs off the worker JS thread',
+            pass:
+              nativeQueue?.ok === true &&
+              // the read was real work, and the JS thread sat out nearly all of it
+              nativeQueue.totalMs > 15 &&
+              nativeQueue.syncMs <= 5,
+            detail: JSON.stringify(nativeQueue),
+          });
+        }
+
         // JSModule bridge suite (typed two-way RPC, events, SharedStore params).
         const bridge = await runBridgeTests();
         all.push(...bridge);

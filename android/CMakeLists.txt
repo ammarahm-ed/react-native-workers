@@ -37,6 +37,7 @@ add_library(
     ../cpp/runtime/WorkerAssetReader.cpp
     ../cpp/runtime/WorkerAssetReaderAndroid.cpp
     ../cpp/runtime/WorkerInspector.cpp
+    ../cpp/runtime/WorkerNativeQueueAndroid.cpp
     ../cpp/runtime/WorkerThreadScope.cpp
     ../cpp/bindings/WorkerBlobCollector.cpp
     ../cpp/bindings/WorkerExpoModules.cpp

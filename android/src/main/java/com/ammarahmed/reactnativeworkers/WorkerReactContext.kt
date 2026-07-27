@@ -55,6 +55,7 @@ internal abstract class WorkerReactContext(
   jsRuntimePointer: Long,
   private val workerCallInvokerHolder: CallInvokerHolder,
   deviceEventSinkId: Long,
+  private val nativeQueueId: Long,
 ) : ReactApplicationContext(host) {
 
   private val workerJsContext = JavaScriptContextHolder(jsRuntimePointer)
@@ -76,6 +77,34 @@ internal abstract class WorkerReactContext(
   /** Called when the worker is torn down, so late JSI installs cannot use a dead runtime. */
   fun invalidateRuntime() {
     workerJsContext.clear()
+  }
+
+  // --- native-modules queue: this worker's, not the host's --------------------
+  //
+  // A worker's module method bodies run on its own C++ queue thread
+  // ([WorkerNativeQueue]), so RN's queue questions have to be answered about that
+  // thread. Left to the host they would assert against the host's native queue —
+  // which a worker thread is never on, breaking every module that calls
+  // `assertOnNativeModulesQueueThread()` — and `runOnNativeModulesQueueThread`
+  // would hand the work to a thread shared with the host.
+
+  override fun isOnNativeModulesQueueThread(): Boolean =
+    WorkerNativeQueue.isOnQueue(nativeQueueId) || super.isOnNativeModulesQueueThread()
+
+  override fun assertOnNativeModulesQueueThread() {
+    if (!isOnNativeModulesQueueThread()) super.assertOnNativeModulesQueueThread()
+  }
+
+  override fun assertOnNativeModulesQueueThread(message: String) {
+    if (!isOnNativeModulesQueueThread()) super.assertOnNativeModulesQueueThread(message)
+  }
+
+  override fun runOnNativeModulesQueueThread(runnable: Runnable) {
+    if (nativeQueueId != 0L) {
+      WorkerNativeQueue.post(nativeQueueId, runnable)
+    } else {
+      super.runOnNativeModulesQueueThread(runnable)
+    }
   }
 
   // --- everything else defers to the host ------------------------------------

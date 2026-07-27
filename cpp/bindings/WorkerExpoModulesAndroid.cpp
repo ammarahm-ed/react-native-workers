@@ -21,6 +21,8 @@
 #include "WorkerExpoModules.h"
 #include "WorkerTurboModules.h"
 
+#include "../runtime/WorkerNativeQueue.h"
+
 #include <fbjni/fbjni.h>
 
 #include <ReactCommon/CallInvoker.h>
@@ -112,7 +114,7 @@ std::function<void()> installExpoOnAndroidWorker(
         "installOnWorker",
         "(Lcom/facebook/react/bridge/RuntimeExecutor;"
         "Lcom/facebook/react/turbomodule/core/CallInvokerHolderImpl;"
-        "JJ)"
+        "JJJ)"
         "Ljava/lang/Object;");
     if (!install) {
       RNWEXPO_ALOG("installOnWorker: methodID NOT FOUND (signature mismatch)");
@@ -124,6 +126,10 @@ std::function<void()> installExpoOnAndroidWorker(
     // device-event target too — an Expo module using the legacy `emitDeviceEvent`
     // path must not reach the host runtime either.
     long long sinkId = registerWorkerDeviceEventSink(workerInvoker);
+    // The Expo context answers queue questions for the SAME worker, so it shares
+    // the TurboModule path's queue when there is one; standalone (Expo without
+    // `nativeModules: true`) it simply has none and defers to the host.
+    long long queueId = 0;
 
     jobject handleLocal = env->CallStaticObjectMethod(
         cls,
@@ -131,7 +137,8 @@ std::function<void()> installExpoOnAndroidWorker(
         reHolder.get(),
         ciHolder.get(),
         static_cast<jlong>(reinterpret_cast<uintptr_t>(&rt)),
-        static_cast<jlong>(sinkId));
+        static_cast<jlong>(sinkId),
+        static_cast<jlong>(queueId));
     if (env->ExceptionCheck()) {
       RNWEXPO_ALOG("installOnWorker: THREW");
       env->ExceptionDescribe();

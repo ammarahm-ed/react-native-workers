@@ -16,4 +16,11 @@ internal class WorkerReactContextImpl(
   jsRuntimePointer: Long,
   workerCallInvokerHolder: CallInvokerHolder,
   deviceEventSinkId: Long,
-) : WorkerReactContext(host, jsRuntimePointer, workerCallInvokerHolder, deviceEventSinkId)
+  nativeQueueId: Long,
+) : WorkerReactContext(
+  host,
+  jsRuntimePointer,
+  workerCallInvokerHolder,
+  deviceEventSinkId,
+  nativeQueueId,
+)

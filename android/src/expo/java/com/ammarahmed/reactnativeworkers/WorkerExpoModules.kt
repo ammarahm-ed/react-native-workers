@@ -63,6 +63,7 @@ object WorkerExpoModules {
     callInvokerHolder: CallInvokerHolderImpl,
     jsRuntimePointer: Long,
     deviceEventSinkId: Long,
+    nativeQueueId: Long,
   ): Any? {
     val host = WorkerTurboModules.hostReactContext() ?: return null
     val modulesProvider = ExpoModulesHelper.modulesProvider ?: return null
@@ -82,7 +83,13 @@ object WorkerExpoModules {
       // A React context reporting THIS worker's runtime + invoker. CoreModule only
       // needs an Android Context (cacheDir/filesDir), which delegates to the host.
       val workerContext =
-        WorkerReactContextImpl(host, jsRuntimePointer, callInvokerHolder, deviceEventSinkId)
+        WorkerReactContextImpl(
+          host,
+          jsRuntimePointer,
+          callInvokerHolder,
+          deviceEventSinkId,
+          nativeQueueId,
+        )
 
       val interop = KotlinInteropModuleRegistry(
         modulesProvider,

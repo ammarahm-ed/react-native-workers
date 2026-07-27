@@ -33,6 +33,7 @@
 #include "WorkerTurboModuleCompat.h"
 
 #include "../runtime/MainThreadScheduler.h"
+#include "../runtime/WorkerNativeQueue.h"
 #include "../runtime/WorkerAssetReader.h"
 #include "../runtime/WorkerThreadScope.h"
 
@@ -62,21 +63,6 @@ namespace {
 
 constexpr const char* kBridgeClass =
     "com/ammarahmed/reactnativeworkers/WorkerTurboModules";
-
-// Runs a native TurboModule method body inline on the worker JS thread (which is
-// JVM-attached with the app class loader for the worker's lifetime). The
-// request/response path of TurboModules is fine here; thread-affine or
-// long-blocking modules would ideally use a dedicated native queue (follow-up).
-class WorkerNativeMethodCallInvoker : public NativeMethodCallInvoker {
- public:
-  void invokeAsync(const std::string&, NativeMethodCallFunc&& func) noexcept
-      override {
-    func();
-  }
-  void invokeSync(const std::string&, NativeMethodCallFunc&& func) override {
-    func();
-  }
-};
 
 constexpr const char* kDeviceEmitterClass =
     "com/ammarahmed/reactnativeworkers/WorkerDeviceEventEmitter";
@@ -274,7 +260,9 @@ void unregisterWorkerDeviceEventSink(long long sinkId) {
 std::shared_ptr<_jobject> buildPlatformManager(
     Runtime& rt,
     const std::shared_ptr<CallInvoker>& workerInvoker,
-    long long deviceEventSinkId) {
+    long long deviceEventSinkId,
+    const std::shared_ptr<WorkerNativeQueue>& nativeQueue,
+    long long nativeQueueId) {
   try {
     auto cls = facebook::jni::findClassStatic(kBridgeClass);
     JNIEnv* env = facebook::jni::Environment::current();
@@ -306,8 +294,10 @@ std::shared_ptr<_jobject> buildPlatformManager(
 
     auto reHolder = JRuntimeExecutor::newObjectCxxArgs(exec);
     auto ciHolder = CallInvokerHolder::newObjectCxxArgs(workerInvoker);
+    // Module method bodies run on the worker's own native queue, never on its JS
+    // thread — RN's model for the host, applied per worker.
     std::shared_ptr<NativeMethodCallInvoker> nmci =
-        std::make_shared<WorkerNativeMethodCallInvoker>();
+        std::make_shared<WorkerNativeMethodCallInvoker>(nativeQueue);
     auto nmciHolder = NativeMethodCallInvokerHolder::newObjectCxxArgs(nmci);
 
     jmethodID install = env->GetStaticMethodID(
@@ -316,7 +306,7 @@ std::shared_ptr<_jobject> buildPlatformManager(
         "(Lcom/facebook/react/bridge/RuntimeExecutor;"
         "Lcom/facebook/react/turbomodule/core/CallInvokerHolderImpl;"
         "Lcom/facebook/react/turbomodule/core/NativeMethodCallInvokerHolderImpl;"
-        "JJ)"
+        "JJJ)"
         "Lcom/facebook/react/internal/turbomodule/core/TurboModuleManager;");
     if (!install) {
       RNWTM_LOG("buildPlatformManager: installOnWorker methodID NOT FOUND "
@@ -336,7 +326,8 @@ std::shared_ptr<_jobject> buildPlatformManager(
         ciHolder.get(),
         nmciHolder.get(),
         static_cast<jlong>(reinterpret_cast<uintptr_t>(&rt)),
-        static_cast<jlong>(deviceEventSinkId));
+        static_cast<jlong>(deviceEventSinkId),
+        static_cast<jlong>(nativeQueueId));
     if (env->ExceptionCheck()) {
       RNWTM_LOG("buildPlatformManager: installOnWorker THREW");
       env->ExceptionDescribe();
@@ -382,15 +373,21 @@ std::function<void(Runtime&)> installWorkerTurboModules(
   // The heavy Java TurboModuleManager is only built when the worker opts in.
   std::shared_ptr<_jobject> manager;
   long long sinkId = 0;
+  long long queueId = 0;
+  std::shared_ptr<WorkerNativeQueue> nativeQueue;
   if (nativeModules) {
-    // Registered BEFORE the manager, because building it constructs the worker's
-    // ReactContext, which needs the id to serve module events from this worker.
+    // Both are registered BEFORE the manager: building it constructs the worker's
+    // ReactContext, which needs the ids to serve module events and queue questions
+    // from this worker rather than the host.
     sinkId = registerWorkerDeviceEventSink(workerInvoker);
-    manager = buildPlatformManager(rt, workerInvoker, sinkId);
+    nativeQueue = std::make_shared<WorkerNativeQueue>();
+    queueId = registerWorkerNativeQueue(nativeQueue);
+    manager = buildPlatformManager(rt, workerInvoker, sinkId, nativeQueue, queueId);
   }
 
   if (!manager) {
     unregisterWorkerDeviceEventSink(sinkId);
+    unregisterWorkerNativeQueue(queueId);
     // Default / not-ready / failure: lightweight Cxx-only path. Nothing to tear
     // down (dies with the runtime).
     installCxxOnly(rt, std::move(workerInvoker));
@@ -409,8 +406,11 @@ std::function<void(Runtime&)> installWorkerTurboModules(
   // The sink is dropped FIRST: a module may emit from its own thread while we're
   // invalidating, and dropping the sink makes that a no-op instead of a post onto
   // a runtime that is about to be destroyed.
-  return [manager, sinkId](Runtime&) {
+  // `nativeQueue` is captured so the queue outlives the modules that post to it;
+  // it stops and joins when this callback is destroyed, after invalidation.
+  return [manager, sinkId, queueId, nativeQueue](Runtime&) {
     unregisterWorkerDeviceEventSink(sinkId);
+    unregisterWorkerNativeQueue(queueId);
     JNIEnv* env = facebook::jni::Environment::current();
     jclass cls = env->GetObjectClass(manager.get());
     jmethodID invalidate = env->GetMethodID(cls, "invalidate", "()V");
