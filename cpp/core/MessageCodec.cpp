@@ -803,10 +803,13 @@ void writeJson(JsonReader& r, std::string& out) {
       std::string name = r.str();
       std::string message = r.str();
       r.str(); // stack
+      // Both MUST be escaped: an Error carrying a quote or backslash (
+      // `new Error('bad "input"')`) would otherwise emit JSON the native
+      // consumer cannot parse.
       out += "{\"name\":\"";
-      out += name;
+      jsonEscape(name, out);
       out += "\",\"message\":\"";
-      out += message;
+      jsonEscape(message, out);
       out += "\"}";
       break;
     }
