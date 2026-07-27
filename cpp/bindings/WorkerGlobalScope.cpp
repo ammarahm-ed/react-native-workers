@@ -2,14 +2,30 @@
 
 #include "../core/MessageCodec.h"
 
+#include <cstdint>
 #include <memory>
 #include <utility>
+#include <vector>
 
 namespace facebook::react::workers {
 
 using namespace facebook::jsi;
 
 namespace {
+
+// Backing store for createTransferableBuffer: an ArrayBuffer built over one of
+// these is `external()`, which is the only kind Hermes will hand back for a
+// zero-copy transfer.
+class VecBuffer : public MutableBuffer {
+ public:
+  explicit VecBuffer(std::shared_ptr<std::vector<uint8_t>> v)
+      : v_(std::move(v)) {}
+  size_t size() const override { return v_->size(); }
+  uint8_t* data() override { return v_->data(); }
+
+ private:
+  std::shared_ptr<std::vector<uint8_t>> v_;
+};
 
 void setHostFn(
     Runtime& rt,
@@ -49,7 +65,9 @@ void installWorkerGlobalScope(Runtime& rt, WorkerHooks hooks) {
           -> Value {
         if (count < 1) return Value::undefined();
         try {
-          Message msg = encode(rt, args[0]);
+          // arg 1 is the transfer list (the prelude always passes an array).
+          Message msg = count >= 2 ? encode(rt, args[0], args[1])
+                                   : encode(rt, args[0]);
           if (shared->onPostMessage) shared->onPostMessage(std::move(msg));
         } catch (const DataCloneError& e) {
           throw JSError(rt, e.what());
@@ -138,6 +156,72 @@ void installWorkerGlobalScope(Runtime& rt, WorkerHooks hooks) {
 }
 
 void installStructuredClone(Runtime& rt) {
+  // An ArrayBuffer whose backing store WE own.
+  //
+  // Hermes only lets a store be taken from an `external()` ArrayBuffer — one
+  // created through `createArrayBuffer(MutableBuffer)` (hermes.cpp: it returns
+  // nullptr for engine-internal buffers). A plain `new ArrayBuffer(n)` is
+  // internal, so transferring it has to copy on the first hop.
+  //
+  // Buffers from here are external, so they transfer with no copy at every hop,
+  // in both directions. Same API as an ordinary ArrayBuffer otherwise.
+  setHostFn(
+      rt,
+      "createTransferableBuffer",
+      1,
+      [](Runtime& rt, const Value&, const Value* args, size_t count) -> Value {
+        if (count < 1 || !args[0].isNumber()) {
+          throw JSError(rt, "createTransferableBuffer(byteLength) requires a number");
+        }
+        double len = args[0].getNumber();
+        if (len < 0 || len != len) {
+          throw JSError(rt, "createTransferableBuffer: byteLength must be >= 0");
+        }
+        auto bytes = std::make_shared<std::vector<uint8_t>>(
+            static_cast<size_t>(len), 0);
+        return Value(ArrayBuffer(rt, std::make_shared<VecBuffer>(bytes)));
+      });
+
+  // `ArrayBuffer.prototype.detached` is a real spec getter, and the only part of
+  // detachment we can honour: transfer marks the buffer (MessageCodec.cpp) and
+  // this reports it. Reads are NOT blocked — the engine still sees live memory —
+  // so this is an honest signal, not enforcement. Never shadow a real
+  // implementation if the engine grows one.
+  {
+    Object arrayBufferCtor = rt.global().getPropertyAsObject(rt, "ArrayBuffer");
+    Object proto = arrayBufferCtor.getPropertyAsObject(rt, "prototype");
+    Object objectCtor = rt.global().getPropertyAsObject(rt, "Object");
+    Function getOwn =
+        objectCtor.getPropertyAsFunction(rt, "getOwnPropertyDescriptor");
+    Value existing = getOwn.call(
+        rt, Value(rt, proto), String::createFromAscii(rt, "detached"));
+    if (!existing.isObject()) {
+      Function defineProperty =
+          objectCtor.getPropertyAsFunction(rt, "defineProperty");
+      Object descriptor(rt);
+      descriptor.setProperty(
+          rt,
+          "get",
+          Function::createFromHostFunction(
+              rt,
+              PropNameID::forAscii(rt, "detached"),
+              0,
+              [](Runtime& rt, const Value& thisVal, const Value*, size_t)
+                  -> Value {
+                if (!thisVal.isObject()) return Value(false);
+                Value marked = thisVal.getObject(rt).getProperty(
+                    rt, "__rnworkersTransferred");
+                return Value(marked.isBool() && marked.getBool());
+              }));
+      descriptor.setProperty(rt, "configurable", Value(true));
+      defineProperty.call(
+          rt,
+          Value(rt, proto),
+          String::createFromAscii(rt, "detached"),
+          std::move(descriptor));
+    }
+  }
+
   setHostFn(
       rt,
       "structuredClone",

@@ -25,10 +25,31 @@ class DataCloneError : public std::runtime_error {
 struct Message {
   std::vector<uint8_t> data;
   std::vector<std::shared_ptr<std::vector<uint8_t>>> blobs;
+  // TRANSFERRED buffers: the sender's own backing store, handed over rather than
+  // copied. The receiver wraps each one in an ArrayBuffer of its own runtime, so
+  // both sides end up viewing one allocation and nothing is copied at any size.
+  std::vector<std::shared_ptr<jsi::MutableBuffer>> transfers;
 };
 
 // Encode a value from `rt`. Throws DataCloneError on unsupported types.
 Message encode(jsi::Runtime& rt, const jsi::Value& value);
+
+// As above, with a `postMessage` transfer list: every ArrayBuffer in `transferList`
+// that the engine lets us reach the backing store of travels by reference instead
+// of being copied.
+//
+// Buffers whose store is NOT reachable (an engine-allocated ArrayBuffer on a JSI
+// without `tryGetMutableBuffer`, or a Hermes buffer it declines) fall back to a
+// copy — the message still arrives intact, it just isn't free.
+Message encode(
+    jsi::Runtime& rt,
+    const jsi::Value& value,
+    const jsi::Value& transferList);
+
+// Whether this build can transfer buffers without copying (i.e. the JSI it was
+// compiled against exposes `tryGetMutableBuffer`). Reported to JS for diagnostics
+// and used by the tests to assert the right behaviour per RN version.
+bool supportsZeroCopyTransfer();
 
 // Rehydrate a message into `rt`.
 jsi::Value decode(jsi::Runtime& rt, const Message& message);

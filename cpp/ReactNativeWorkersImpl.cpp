@@ -118,7 +118,9 @@ bool ReactNativeWorkersImpl::install(jsi::Runtime& rt) {
             auto it = self->runtimes_.find(rit->second);
             if (it == self->runtimes_.end()) return Value::undefined();
             try {
-              Message msg = workers::encode(rt, args[1]);
+              // arg 2 is the transfer list from Worker.postMessage(data, transfer).
+              Message msg = count >= 3 ? workers::encode(rt, args[1], args[2])
+                                       : workers::encode(rt, args[1]);
               it->second->deliverToWorker(std::move(msg));
             } catch (const DataCloneError& e) {
               throw JSError(rt, e.what());

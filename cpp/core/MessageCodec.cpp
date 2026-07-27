@@ -29,6 +29,9 @@ enum Tag : uint8_t {
   // A SharedBuffer passed BY REFERENCE: only its name travels, and the receiver
   // reopens the same native allocation. Nothing is copied, at any size.
   TAG_SHAREDBUFFER = 13,
+  // A TRANSFERRED ArrayBuffer: an index into Message::transfers. The bytes never
+  // move; the receiver wraps the sender's backing store.
+  TAG_TRANSFER = 14,
 };
 
 class VecMutableBuffer : public MutableBuffer {
@@ -44,8 +47,104 @@ class VecMutableBuffer : public MutableBuffer {
 
 // ---- encoder ----
 
+// `Runtime::tryGetMutableBuffer` — the whole basis of zero-copy transfer — was
+// added to JSI after our floor (RN 0.81), and Hermes ships almost no exported
+// symbols, so there is nothing to probe at link time. Detect the METHOD at compile
+// time instead: it is a virtual on the runtime we already hold, so where the
+// header has it the call is an ordinary vtable dispatch, and where it doesn't the
+// branch compiles away and transfers degrade to copies.
+template <typename R, typename = void>
+struct HasTryGetMutableBuffer : std::false_type {};
+template <typename R>
+struct HasTryGetMutableBuffer<
+    R,
+    std::void_t<decltype(std::declval<R&>().tryGetMutableBuffer(
+        std::declval<const ArrayBuffer&>()))>> : std::true_type {};
+
+constexpr bool kCanTransfer = HasTryGetMutableBuffer<Runtime>::value;
+
+// Reaches an ArrayBuffer's backing store, or null when the engine won't share it.
+std::shared_ptr<MutableBuffer> tryTakeBackingStore(
+    Runtime& rt,
+    const ArrayBuffer& ab) {
+  if constexpr (HasTryGetMutableBuffer<Runtime>::value) {
+    return rt.tryGetMutableBuffer(ab);
+  } else {
+    (void)rt;
+    (void)ab;
+    return nullptr;
+  }
+}
+
+// Simulated detachment.
+//
+// The spec detaches a transferred ArrayBuffer: byteLength becomes 0 and access
+// throws. JSI gives us no detach (Hermes has JSArrayBuffer::detach internally, but
+// nothing public exposes it — `detached()` is query-only), so we cannot make the
+// engine forget the buffer.
+//
+// What we CAN do is mark the object, since an ArrayBuffer is an ordinary JS object
+// here. That buys the spec's *error* semantics — a transferred buffer can no longer
+// be cloned or transferred again, which is where misuse actually shows up — and an
+// honest `detached` getter. It does NOT make reads throw: code that keeps using a
+// transferred buffer still sees live memory. That limit is documented rather than
+// papered over.
+constexpr const char* kTransferredProp = "__rnworkersTransferred";
+
+bool isMarkedTransferred(Runtime& rt, const Object& obj) {
+  Value v = obj.getProperty(rt, kTransferredProp);
+  return v.isBool() && v.getBool();
+}
+
+void markTransferred(Runtime& rt, const Object& obj) {
+  // defineProperty rather than setProperty: non-enumerable so it never surfaces in
+  // user iteration, and non-configurable so it cannot be cleared to "re-attach".
+  Object objectCtor = rt.global().getPropertyAsObject(rt, "Object");
+  Function defineProperty = objectCtor.getPropertyAsFunction(rt, "defineProperty");
+  Object descriptor(rt);
+  descriptor.setProperty(rt, "value", Value(true));
+  descriptor.setProperty(rt, "enumerable", Value(false));
+  descriptor.setProperty(rt, "writable", Value(false));
+  descriptor.setProperty(rt, "configurable", Value(false));
+  defineProperty.call(
+      rt,
+      Value(rt, obj),
+      String::createFromAscii(rt, kTransferredProp),
+      std::move(descriptor));
+}
+
+// The buffers a postMessage asked to transfer, paired with the index they were
+// given in Message::transfers. Small and linear on purpose: a transfer list is a
+// handful of entries, and jsi has no hashable object identity.
+struct TransferTable {
+  // Held as Values because jsi::Object is move-only; Value is the copyable handle.
+  std::vector<std::pair<Value, uint32_t>> entries;
+  // Every buffer the caller asked to transfer, including ones the engine would
+  // not give us a store for (those still encode by copy, but ownership moves).
+  std::vector<Value> accepted;
+
+  // Detach (as far as JSI allows) — only after the whole message has encoded, so
+  // a throwing postMessage leaves the caller's buffers untouched.
+  void markAllTransferred(Runtime& rt) const {
+    for (const auto& obj : accepted) {
+      markTransferred(rt, obj.getObject(rt));
+    }
+  }
+
+  // Index for `ab` if it was transferred, else nullopt.
+  std::optional<uint32_t> find(Runtime& rt, const Object& ab) const {
+    for (const auto& [held, index] : entries) {
+      if (held.isObject() && Object::strictEquals(rt, held.getObject(rt), ab)) {
+        return index;
+      }
+    }
+    return std::nullopt;
+  }
+};
+
 struct Encoder {
   Runtime& rt;
+  const TransferTable* transfers = nullptr;
   Message msg;
   // Cycle/dedup detection via a JS Map (object -> id): identity-hashed O(1)
   // lookup per object instead of a linear jsi strictEquals scan (O(N^2) over the
@@ -136,6 +235,21 @@ void encodeObject(Encoder& e, const Value& v, const Object& obj) {
   }
 
   if (obj.isArrayBuffer(rt)) {
+    // Structured-cloning a detached buffer is a DataCloneError per spec, and this
+    // is where use-after-transfer realistically surfaces.
+    if (isMarkedTransferred(rt, obj)) {
+      throw DataCloneError(
+          "Could not clone value: the ArrayBuffer has been transferred.");
+    }
+    // Listed for transfer AND reachable: hand over the backing store instead of
+    // copying the bytes.
+    if (e.transfers) {
+      if (auto index = e.transfers->find(rt, obj)) {
+        e.byte(TAG_TRANSFER);
+        e.varuint(*index);
+        return;
+      }
+    }
     ArrayBuffer ab = obj.getArrayBuffer(rt);
     e.byte(TAG_ARRAYBUFFER);
     e.varuint(e.addBlob(ab.data(rt), ab.size(rt)));
@@ -325,6 +439,13 @@ Value decodeValue(Decoder& d) {
           .getPropertyAsFunction(rt, ctorName.c_str())
           .callAsConstructor(rt, std::move(ab));
     }
+    case TAG_TRANSFER: {
+      uint32_t idx = d.varuint();
+      if (idx >= d.msg.transfers.size()) throw DataCloneError("bad transfer index");
+      // The sender's own memory, wrapped in an ArrayBuffer belonging to THIS
+      // runtime. No copy — both sides now view one allocation.
+      return Value(ArrayBuffer(rt, d.msg.transfers[idx]));
+    }
     case TAG_SHAREDBUFFER: {
       std::string name = d.str();
       uint32_t byteLength = d.varuint();
@@ -450,8 +571,16 @@ void writeJson(JsonReader& r, std::string& out) {
     case TAG_REF:
     case TAG_ARRAYBUFFER:
     case TAG_TYPEDARRAY:
-      if (tag == TAG_REF || tag == TAG_ARRAYBUFFER) r.varuint();
+    case TAG_TRANSFER:
+    case TAG_SHAREDBUFFER:
+      // Binary has no JSON form, but every payload must still be CONSUMED here:
+      // this reader walks the same byte stream as the decoder, so skipping a
+      // field would mis-parse everything after it.
+      if (tag == TAG_REF || tag == TAG_ARRAYBUFFER || tag == TAG_TRANSFER) {
+        r.varuint();
+      }
       if (tag == TAG_TYPEDARRAY) { r.str(); r.varuint(); }
+      if (tag == TAG_SHAREDBUFFER) { r.str(); r.varuint(); }
       out += "null";
       break;
     case TAG_FALSE: out += "false"; break;
@@ -504,6 +633,77 @@ void writeJson(JsonReader& r, std::string& out) {
 }
 
 } // namespace
+
+bool supportsZeroCopyTransfer() {
+  return kCanTransfer;
+}
+
+// Builds the transfer table: for each ArrayBuffer in the list, take its backing
+// store. Entries we cannot take are simply left out, so they encode as ordinary
+// (copied) buffers — a transfer list must never make a message fail.
+static TransferTable buildTransferTable(
+    Runtime& rt,
+    const Value& transferList,
+    Message& msg) {
+  TransferTable table;
+  if (transferList.isUndefined() || transferList.isNull()) return table;
+  if (!transferList.isObject()) return table;
+  Object listObj = transferList.getObject(rt);
+  if (!listObj.isArray(rt)) return table;
+  Array list = listObj.getArray(rt);
+  size_t n = list.size(rt);
+
+  for (size_t i = 0; i < n; ++i) {
+    Value item = list.getValueAtIndex(rt, i);
+    // Spec: a non-transferable entry is a DataCloneError. ArrayBuffer is the only
+    // transferable type here (no MessagePort/ImageBitmap in this runtime).
+    if (!item.isObject() || !item.getObject(rt).isArrayBuffer(rt)) {
+      throw DataCloneError(
+          "Failed to execute 'postMessage': the transfer list contains a value "
+          "that is not a transferable object.");
+    }
+    Object obj = item.getObject(rt);
+    if (isMarkedTransferred(rt, obj)) {
+      throw DataCloneError(
+          "Failed to execute 'postMessage': an ArrayBuffer in the transfer list "
+          "has already been transferred.");
+    }
+    // Spec: the same object twice in one transfer list is a DataCloneError.
+    for (const auto& seen : table.accepted) {
+      if (Object::strictEquals(rt, seen.getObject(rt), obj)) {
+        throw DataCloneError(
+            "Failed to execute 'postMessage': an ArrayBuffer appears twice in "
+            "the transfer list.");
+      }
+    }
+
+    auto store = tryTakeBackingStore(rt, obj.getArrayBuffer(rt));
+    if (store) {
+      // Zero-copy: the receiver wraps this very allocation.
+      msg.transfers.push_back(std::move(store));
+      table.entries.emplace_back(
+          Value(rt, obj), static_cast<uint32_t>(msg.transfers.size() - 1));
+    }
+    // No store (an engine-internal ArrayBuffer — Hermes only shares `external()`
+    // ones): it still encodes, by copy. The caller asked to transfer, so it is
+    // still marked below; ownership semantics stay the same either way.
+    table.accepted.emplace_back(rt, obj);
+  }
+  return table;
+}
+
+Message encode(Runtime& rt, const Value& value, const Value& transferList) {
+  Encoder e(rt);
+  TransferTable table = buildTransferTable(rt, transferList, e.msg);
+  e.transfers = &table;
+  encodeValue(e, value);
+  // Encoding succeeded, so the handover is real: detach the sources now. Doing it
+  // earlier would make the encoder reject the very buffers being transferred (they
+  // are normally part of the message body too), and would strand the caller's
+  // buffers as detached if encoding threw.
+  table.markAllTransferred(rt);
+  return std::move(e.msg);
+}
 
 Message encode(Runtime& rt, const Value& value) {
   Encoder e(rt);

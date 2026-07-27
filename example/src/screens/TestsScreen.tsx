@@ -864,6 +864,93 @@ export default function TestsScreen() {
           detail: JSON.stringify(sharedPost),
         });
 
+        // Transferable ArrayBuffers, round trip. Measures each hop rather than
+        // assuming: Hermes only shares the store of an `external()` buffer, so a
+        // plain `new ArrayBuffer` copies on the way out, while a buffer from
+        // createTransferableBuffer (and anything received via transfer) does not.
+        const transferProbe = await new Promise<any>((resolve) => {
+          try {
+            const mk = (globalThis as any).createTransferableBuffer;
+            const plain = new ArrayBuffer(4096);
+            const external = mk ? mk(4096) : new ArrayBuffer(4096);
+
+            const runHop = (ab: ArrayBuffer, label: string) =>
+              new Promise<any>((done) => {
+                const hostView = new Uint8Array(ab);
+                hostView[0] = 7;
+                const w = new Worker('../workers/transfer');
+                const timer = setTimeout(() => {
+                  w.terminate();
+                  done({ label, __timeout: true });
+                }, 6000);
+                w.onmessage = (e: any) => {
+                  clearTimeout(timer);
+                  w.terminate();
+                  const returned = e.data?.buffer;
+                  done({
+                    label,
+                    sawHostByte: e.data?.sawHostByte,
+                    byteLength: e.data?.byteLength,
+                    // Did the worker's write land in the memory we still hold?
+                    outboundZeroCopy: new Uint8Array(ab)[1] === 88,
+                    // The buffer that came home must carry the worker's write.
+                    returnedByte: returned ? new Uint8Array(returned)[2] : -1,
+                    // Simulated detachment: our marker on the sent buffer.
+                    senderDetached: (ab as any).detached === true,
+                  });
+                };
+                w.onerror = (e: any) => {
+                  clearTimeout(timer);
+                  w.terminate();
+                  done({ label, __error: e.message });
+                };
+                w.postMessage({ buffer: ab }, [ab]);
+              });
+
+            (async () => {
+              const plainHop = await runHop(plain, 'plain');
+              const externalHop = await runHop(external, 'external');
+              // Re-sending a transferred buffer must throw (spec DataCloneError).
+              // structuredClone runs the same encoder synchronously; posting to a
+              // fresh worker would only queue the message and encode later.
+              let reuseThrew = false;
+              try {
+                (globalThis as any).structuredClone({ buffer: plain });
+              } catch {
+                reuseThrew = true;
+              }
+              resolve({
+                plainHop,
+                externalHop,
+                reuseThrew,
+                hasAllocator: !!mk,
+              });
+            })();
+          } catch (err) {
+            resolve({ __threw: String((err as any)?.message ?? err) });
+          }
+        });
+        console.log('[TRANSFER-PROBE]', JSON.stringify(transferProbe));
+        all.push({
+          name: 'transferable ArrayBuffer (zero-copy + round trip + detach)',
+          pass:
+            // delivery correct on both hops
+            transferProbe?.plainHop?.sawHostByte === 7 &&
+            transferProbe?.externalHop?.sawHostByte === 7 &&
+            transferProbe?.externalHop?.byteLength === 4096 &&
+            // the buffer comes home carrying the worker's write
+            transferProbe?.externalHop?.returnedByte === 55 &&
+            transferProbe?.plainHop?.returnedByte === 55 &&
+            // an external buffer transfers with no copy; a plain one cannot
+            transferProbe?.externalHop?.outboundZeroCopy === true &&
+            // simulated detachment is observable on both
+            transferProbe?.externalHop?.senderDetached === true &&
+            transferProbe?.plainHop?.senderDetached === true &&
+            // a detached buffer can no longer be cloned (spec DataCloneError)
+            transferProbe?.reuseThrew === true,
+          detail: JSON.stringify(transferProbe),
+        });
+
         // JSModule bridge suite (typed two-way RPC, events, SharedStore params).
         const bridge = await runBridgeTests();
         all.push(...bridge);
