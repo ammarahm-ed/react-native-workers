@@ -33,9 +33,14 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 90
     env:
+      # React Native's Podfile wires ccache into every pod target itself when this
+      # is set — it must be set for `pod install`, not just the build.
+      USE_CCACHE: '1'
       # Xcode bakes absolute paths and -g flags into every compile; without these
       # the cache misses on almost everything. Matches compat-matrix.yml.
-      CCACHE_HASHDIR: 'false'
+      # NOTE: the option is NOHASHDIR=true — there is no CCACHE_HASHDIR, and
+      # ccache hard-errors on the unknown name rather than ignoring it.
+      CCACHE_NOHASHDIR: 'true'
       CCACHE_SLOPPINESS: 'clang_index_store,file_stat_matches,include_file_ctime,include_file_mtime,ivfsoverlay,pch_defines,modules,system_headers,time_macros'
       CCACHE_FILECLONE: 'true'
       CCACHE_DEPEND: 'true'

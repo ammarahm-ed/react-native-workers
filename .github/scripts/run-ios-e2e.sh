@@ -76,6 +76,11 @@ echo "::endgroup::"
 # --- build -----------------------------------------------------------------
 echo "::group::pod install + build"
 cd "$APP_DIR"
+# React Native's Podfile wires ccache into every pod target when USE_CCACHE=1 is
+# set at POD INSTALL time. That is the supported path; driving ccache through
+# CC/CXX wrapper scripts instead makes Xcode fail to recognise the compiler and
+# silently disable explicit modules.
+export USE_CCACHE="${USE_CCACHE:-1}"
 pod install
 
 BUILD_ARGS=(
@@ -88,26 +93,6 @@ BUILD_ARGS=(
   build
   CODE_SIGNING_ALLOWED=NO
 )
-
-# Same ccache wiring as build-ios.sh: Xcode calls our wrapper, which forwards to
-# ccache. Absent ccache is a warning, not a failure — a slow build still gives
-# the signal this job exists for.
-CCACHE_BIN="$(command -v ccache || true)"
-if [ -n "$CCACHE_BIN" ]; then
-  WRAPPER_DIR="$APP_DIR/.ccache-bin"
-  mkdir -p "$WRAPPER_DIR"
-  printf '#!/bin/sh\nexec "%s" clang "$@"\n' "$CCACHE_BIN" > "$WRAPPER_DIR/ccache-clang"
-  printf '#!/bin/sh\nexec "%s" clang++ "$@"\n' "$CCACHE_BIN" > "$WRAPPER_DIR/ccache-clang++"
-  chmod +x "$WRAPPER_DIR/ccache-clang" "$WRAPPER_DIR/ccache-clang++"
-  BUILD_ARGS+=(
-    CC="$WRAPPER_DIR/ccache-clang"
-    CXX="$WRAPPER_DIR/ccache-clang++"
-    LD="$WRAPPER_DIR/ccache-clang"
-    LDPLUSPLUS="$WRAPPER_DIR/ccache-clang++"
-  )
-else
-  echo "::warning::ccache not found; building without it"
-fi
 
 set -o pipefail
 xcodebuild "${BUILD_ARGS[@]}" | tail -40

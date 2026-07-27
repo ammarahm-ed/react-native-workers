@@ -59,7 +59,13 @@ env:
   CCACHE_DEPEND: 'true'
   CCACHE_INODECACHE: 'true'
   CCACHE_SLOPPINESS: clang_index_store,file_stat_matches,include_file_ctime,include_file_mtime,ivfsoverlay,pch_defines,modules,system_headers,time_macros
-  CCACHE_HASHDIR: 'false'
+  # NOTE: the option is NOHASHDIR=true — there is no CCACHE_HASHDIR, and ccache
+  # hard-errors on the unknown name instead of ignoring it, failing every compile.
+  CCACHE_NOHASHDIR: 'true'
+  # React Native's Podfile wires ccache into the Pods project when this is set,
+  # which keeps Xcode's explicit modules working (CC/CXX wrappers silently
+  # disable them).
+  USE_CCACHE: '1'
 
 jobs:
   # ---------------------------------------------------------------------------
