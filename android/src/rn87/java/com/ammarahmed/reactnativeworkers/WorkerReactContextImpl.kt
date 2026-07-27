@@ -18,7 +18,8 @@ internal class WorkerReactContextImpl(
   host: ReactApplicationContext,
   jsRuntimePointer: Long,
   workerCallInvokerHolder: CallInvokerHolder,
-) : WorkerReactContext(host, jsRuntimePointer, workerCallInvokerHolder) {
+  deviceEventSinkId: Long,
+) : WorkerReactContext(host, jsRuntimePointer, workerCallInvokerHolder, deviceEventSinkId) {
 
   override fun getRuntimeExecutor(): RuntimeExecutor? = host.runtimeExecutor
 }

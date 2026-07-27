@@ -189,6 +189,9 @@ object WorkerTurboModules {
    * work inside a worker — see [WorkerReactContext].
    *
    * @param jsRuntimePointer address of this worker's `jsi::Runtime`.
+   * @param deviceEventSinkId C++ handle for this worker's device-event target, so
+   *   module events are dispatched on the worker rather than on the host runtime
+   *   (see [WorkerDeviceEventEmitter]).
    */
   @JvmStatic
   fun installOnWorker(
@@ -196,11 +199,12 @@ object WorkerTurboModules {
     jsCallInvokerHolder: CallInvokerHolderImpl,
     nativeMethodCallInvokerHolder: NativeMethodCallInvokerHolderImpl,
     jsRuntimePointer: Long,
+    deviceEventSinkId: Long,
   ): TurboModuleManager? {
     val packages = workerPackages ?: return null
     val host = hostContext ?: return null
     val workerContext =
-      WorkerReactContextImpl(host, jsRuntimePointer, jsCallInvokerHolder)
+      WorkerReactContextImpl(host, jsRuntimePointer, jsCallInvokerHolder, deviceEventSinkId)
     val delegate =
       DefaultTurboModuleManagerDelegate.Builder()
         .setPackages(packages)

@@ -5,6 +5,7 @@ import {
   StyleSheet,
   ScrollView,
   DeviceEventEmitter,
+  NativeModules,
   Platform,
 } from 'react-native';
 import {
@@ -720,6 +721,64 @@ export default function TestsScreen() {
           name: 'device-event (host→worker)',
           pass: deviceEvt?.hello === 'device',
           detail: JSON.stringify(deviceEvt),
+        });
+
+        // Isolation rule: a worker's native-module work must not depend on the
+        // host JS thread. We warm the worker up, then start an XHR in it, pin the
+        // host JS thread in a busy loop, and check (on the shared clock) that the
+        // response landed WHILE the host was blocked. XHR completion is a device
+        // event — exactly the path that used to round-trip through the host runtime.
+        const netIsolation = await new Promise<any>((resolve) => {
+          try {
+            const src = NativeModules?.SourceCode?.getConstants?.().scriptURL;
+            const origin = src
+              ? String(src).match(/^https?:\/\/[^/]+/)?.[0]
+              : null;
+            if (!origin) {
+              resolve({ __skipped: 'no dev-server origin (release bundle)' });
+              return;
+            }
+            const w = new Worker('../workers/netisolation', {
+              nativeModules: true,
+            });
+            const timer = setTimeout(() => {
+              w.terminate();
+              resolve({ __timeout: true });
+            }, 10000);
+            let blockEnd = 0;
+            w.onmessage = (e: any) => {
+              // Worker is up and its module graph is evaluated: only now does the
+              // measurement mean anything, so start the request and pin the thread.
+              if (e.data?.phase === 'ready') {
+                w.postMessage({ url: `${origin}/status` });
+                const until = Date.now() + 1500;
+                while (Date.now() < until) {
+                  // pin this thread — nothing on the host runtime can run
+                }
+                blockEnd = Date.now();
+                return;
+              }
+              clearTimeout(timer);
+              w.terminate();
+              resolve({ ...e.data, blockEnd });
+            };
+            w.onerror = (e: any) => {
+              clearTimeout(timer);
+              w.terminate();
+              resolve({ __error: e.message });
+            };
+            w.postMessage({ ping: true });
+          } catch (err) {
+            resolve({ __threw: String((err as any)?.message ?? err) });
+          }
+        });
+        all.push({
+          name: 'worker network completes while host JS thread is blocked',
+          pass:
+            netIsolation?.__skipped !== undefined ||
+            (netIsolation?.ok === true &&
+              netIsolation.completedAt < netIsolation.blockEnd),
+          detail: JSON.stringify(netIsolation),
         });
 
         // JSModule bridge suite (typed two-way RPC, events, SharedStore params).

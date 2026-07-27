@@ -37,4 +37,19 @@ std::function<void(jsi::Runtime&)> installWorkerTurboModules(
 // Shared denylist (UI-affine / main-runtime-only modules) — defined in the .cpp.
 bool isWorkerModuleDenied(const std::string& name);
 
+#if defined(__ANDROID__)
+// Device-event sinks (WorkerTurboModulesAndroid.cpp).
+//
+// A worker's Java modules emit through `ReactContext.emitDeviceEvent`, which we
+// serve from WorkerDeviceEventEmitter so the event lands on the WORKER runtime
+// instead of the host's. Kotlin holds only an opaque id; these register/erase the
+// record that maps it to the worker's CallInvoker.
+//
+// The id is looked up under a lock on every emit, so an event raised on a module's
+// own thread after the worker is gone resolves to nothing and is dropped, rather
+// than racing a destroyed runtime. Unregister on the worker thread during teardown.
+long long registerWorkerDeviceEventSink(std::shared_ptr<CallInvoker> workerInvoker);
+void unregisterWorkerDeviceEventSink(long long sinkId);
+#endif
+
 } // namespace facebook::react::workers

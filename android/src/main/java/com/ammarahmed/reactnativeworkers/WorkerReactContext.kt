@@ -54,9 +54,13 @@ internal abstract class WorkerReactContext(
   protected val host: ReactApplicationContext,
   jsRuntimePointer: Long,
   private val workerCallInvokerHolder: CallInvokerHolder,
+  deviceEventSinkId: Long,
 ) : ReactApplicationContext(host) {
 
   private val workerJsContext = JavaScriptContextHolder(jsRuntimePointer)
+
+  /** This worker's own device-event target — see [WorkerDeviceEventEmitter]. */
+  private val deviceEventEmitter = WorkerDeviceEventEmitter(deviceEventSinkId)
 
   init {
     // Copies the host's ReactQueueConfiguration + interop registry.
@@ -76,8 +80,26 @@ internal abstract class WorkerReactContext(
 
   // --- everything else defers to the host ------------------------------------
 
+  /**
+   * Device events are served from THIS worker; everything else still defers to the
+   * host.
+   *
+   * `ReactContext.emitDeviceEvent` — and the `getJSModule(RCTDeviceEventEmitter)`
+   * idiom modules use directly — resolve here. Returning the worker's own emitter
+   * keeps a worker module's events off the host runtime and off the RN JS thread
+   * entirely (see [WorkerDeviceEventEmitter]); delegating them to the host, as the
+   * other overrides do, would round-trip and copy every event.
+   *
+   * Other JS modules (HMRClient, AppRegistry, …) have no worker counterpart and are
+   * still the host's.
+   */
+  @Suppress("UNCHECKED_CAST")
   override fun <T : JavaScriptModule> getJSModule(jsInterface: Class<T>): T =
-    host.getJSModule(jsInterface)
+    if (deviceEventEmitter.serves(jsInterface)) {
+      deviceEventEmitter.proxyFor(jsInterface) as T
+    } else {
+      host.getJSModule(jsInterface)
+    }
 
   override fun <T : NativeModule> hasNativeModule(nativeModuleInterface: Class<T>): Boolean =
     host.hasNativeModule(nativeModuleInterface)

@@ -21,8 +21,11 @@
 #include <ReactCommon/TurboModule.h>
 #include <ReactCommon/TurboModuleBinding.h>
 
+#include <jsi/JSIDynamic.h>
+
 // RN JNI hybrids (headers reached via include dirs added in android/CMakeLists.txt).
 #include "react/jni/JRuntimeExecutor.h"
+#include "react/jni/ReadableNativeArray.h"
 #include "react/turbomodule/ReactCommon/CallInvokerHolder.h"
 #include "react/turbomodule/ReactCommon/NativeMethodCallInvokerHolder.h"
 
@@ -36,8 +39,11 @@
 #include <android/log.h>
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
+#include <vector>
 
 #define RNWTM_LOG(...) \
   __android_log_print(ANDROID_LOG_INFO, "RNWorkerTM", __VA_ARGS__)
@@ -71,6 +77,137 @@ class WorkerNativeMethodCallInvoker : public NativeMethodCallInvoker {
     func();
   }
 };
+
+constexpr const char* kDeviceEmitterClass =
+    "com/ammarahmed/reactnativeworkers/WorkerDeviceEventEmitter";
+
+// ---------------------------------------------------------------------------
+// Device-event sinks: a worker module's events go to the WORKER runtime.
+//
+// Kotlin's WorkerDeviceEventEmitter holds only an opaque id; the CallInvoker it
+// resolves to lives here. Modules emit from their own threads (OkHttp, executors)
+// and can outlive the worker, so the id is resolved under a lock on every emit and
+// a missing entry simply drops the event.
+// ---------------------------------------------------------------------------
+
+struct DeviceEventSink {
+  std::weak_ptr<CallInvoker> invoker;
+};
+
+std::mutex& sinkMutex() {
+  static std::mutex m;
+  return m;
+}
+std::unordered_map<long long, std::shared_ptr<DeviceEventSink>>& sinkRegistry() {
+  static std::unordered_map<long long, std::shared_ptr<DeviceEventSink>> r;
+  return r;
+}
+
+// Bound to WorkerDeviceEventEmitter.nativeEmit. Runs on whichever thread the
+// module emitted from; only the payload marshalling happens here, the JSI work is
+// posted onto the worker thread.
+void emitDeviceEventNative(
+    JNIEnv* env,
+    jclass,
+    jlong sinkId,
+    jstring jEventName,
+    jobject jArgs) {
+  std::shared_ptr<DeviceEventSink> sink;
+  {
+    std::lock_guard<std::mutex> lock(sinkMutex());
+    auto& r = sinkRegistry();
+    auto it = r.find(static_cast<long long>(sinkId));
+    if (it != r.end()) sink = it->second;
+  }
+  if (!sink) return; // worker already torn down — drop the event
+  auto invoker = sink->invoker.lock();
+  if (!invoker) return;
+
+  std::string eventName;
+  if (jEventName) {
+    const char* chars = env->GetStringUTFChars(jEventName, nullptr);
+    if (chars) {
+      eventName = chars;
+      env->ReleaseStringUTFChars(jEventName, chars);
+    }
+  }
+  if (eventName.empty()) return;
+
+  // The array was built fresh for this emit (WorkerDeviceEventEmitter.emit), so
+  // consuming it is safe.
+  folly::dynamic payload = folly::dynamic::array();
+  try {
+    if (jArgs) {
+      auto nativeArray = jni::static_ref_cast<NativeArray::jhybridobject>(
+          jni::wrap_alias(jArgs));
+      payload = nativeArray->cthis()->consume();
+    }
+  } catch (const std::exception& e) {
+    RNWTM_LOG("device event '%s': payload conversion failed: %s",
+              eventName.c_str(), e.what());
+    return;
+  }
+
+  auto args = std::make_shared<folly::dynamic>(std::move(payload));
+  invoker->invokeAsync([args, eventName](Runtime& rt) {
+    Value emitterVal = rt.global().getProperty(rt, "__rctDeviceEventEmitter");
+    if (!emitterVal.isObject()) return;
+    Object emitter = emitterVal.asObject(rt);
+    Value emitVal = emitter.getProperty(rt, "emit");
+    if (!emitVal.isObject() || !emitVal.asObject(rt).isFunction(rt)) return;
+
+    std::vector<Value> jsArgs;
+    jsArgs.emplace_back(String::createFromUtf8(rt, eventName));
+    if (args->isArray()) {
+      for (const auto& item : *args) {
+        jsArgs.emplace_back(valueFromDynamic(rt, item));
+      }
+    }
+    try {
+      // A METHOD call: RN's RCTDeviceEventEmitterImpl keeps its listener registry
+      // in a private field, so an undefined receiver throws (same reason RN's own
+      // emitDeviceEvent uses callWithThis).
+      // The const Value* cast selects the array overload rather than the
+      // variadic template (which would try to convert the pointer itself).
+      emitVal.asObject(rt).asFunction(rt).callWithThis(
+          rt, emitter, static_cast<const Value*>(jsArgs.data()), jsArgs.size());
+    } catch (const JSError& e) {
+      RNWTM_LOG("device event '%s': listener threw: %s", eventName.c_str(),
+                e.getMessage().c_str());
+    }
+  });
+}
+
+// Binds nativeEmit once. Called on the worker thread while JNI is attached with
+// the app class loader (the library has no JNI_OnLoad of its own — same idiom as
+// MainThreadScheduler).
+bool ensureDeviceEmitterRegistered() {
+  static bool ok = false;
+  static std::once_flag once;
+  std::call_once(once, [] {
+    try {
+      auto cls = facebook::jni::findClassStatic(kDeviceEmitterClass);
+      JNIEnv* env = facebook::jni::Environment::current();
+      static const JNINativeMethod methods[] = {
+          {"nativeEmit",
+           "(JLjava/lang/String;Lcom/facebook/react/bridge/WritableNativeArray;)V",
+           reinterpret_cast<void*>(&emitDeviceEventNative)},
+      };
+      if (env->RegisterNatives(cls.get(), methods, 1) != JNI_OK) {
+        if (env->ExceptionCheck()) {
+          env->ExceptionDescribe();
+          env->ExceptionClear();
+        }
+        RNWTM_LOG("RegisterNatives failed for WorkerDeviceEventEmitter.nativeEmit");
+        return;
+      }
+      ok = true;
+    } catch (const std::exception& e) {
+      RNWTM_LOG("device emitter registration failed: %s", e.what());
+    }
+  });
+  return ok;
+}
 
 // Cxx-only fallback, used when the app has not registered its packages. Mirrors
 // the generic non-Apple path in WorkerTurboModules.cpp.
@@ -112,13 +249,32 @@ ThreadScopeRegistrar g_threadScopeRegistrar;
 
 } // namespace
 
+long long registerWorkerDeviceEventSink(
+    std::shared_ptr<CallInvoker> workerInvoker) {
+  if (!ensureDeviceEmitterRegistered()) return 0;
+  static long long nextId = 1;
+  auto sink = std::make_shared<DeviceEventSink>();
+  sink->invoker = workerInvoker;
+  std::lock_guard<std::mutex> lock(sinkMutex());
+  long long id = nextId++;
+  sinkRegistry()[id] = std::move(sink);
+  return id;
+}
+
+void unregisterWorkerDeviceEventSink(long long sinkId) {
+  if (sinkId == 0) return;
+  std::lock_guard<std::mutex> lock(sinkMutex());
+  sinkRegistry().erase(sinkId);
+}
+
 // Builds the per-worker Java TurboModuleManager and returns a global ref to it
 // (safe to release from any thread), or null on failure. Runs on the worker
 // thread inside the ThreadScope::WithClassLoader body (see the registrar below
 // and WorkerThreadScope.h) so JNI FindClass resolves app + RN classes.
 std::shared_ptr<_jobject> buildPlatformManager(
     Runtime& rt,
-    const std::shared_ptr<CallInvoker>& workerInvoker) {
+    const std::shared_ptr<CallInvoker>& workerInvoker,
+    long long deviceEventSinkId) {
   try {
     auto cls = facebook::jni::findClassStatic(kBridgeClass);
     JNIEnv* env = facebook::jni::Environment::current();
@@ -160,7 +316,7 @@ std::shared_ptr<_jobject> buildPlatformManager(
         "(Lcom/facebook/react/bridge/RuntimeExecutor;"
         "Lcom/facebook/react/turbomodule/core/CallInvokerHolderImpl;"
         "Lcom/facebook/react/turbomodule/core/NativeMethodCallInvokerHolderImpl;"
-        "J)"
+        "JJ)"
         "Lcom/facebook/react/internal/turbomodule/core/TurboModuleManager;");
     if (!install) {
       RNWTM_LOG("buildPlatformManager: installOnWorker methodID NOT FOUND "
@@ -170,14 +326,17 @@ std::shared_ptr<_jobject> buildPlatformManager(
     }
     // The runtime pointer lets the Kotlin side build a per-worker
     // ReactApplicationContext that reports THIS runtime, so libraries installing
-    // JSI bindings via `context.javaScriptContextHolder` target the worker.
+    // JSI bindings via `context.javaScriptContextHolder` target the worker. The
+    // sink id gives that context a device-event target on THIS worker, so module
+    // events never reach the host runtime.
     jobject managerLocal = env->CallStaticObjectMethod(
         cls.get(),
         install,
         reHolder.get(),
         ciHolder.get(),
         nmciHolder.get(),
-        static_cast<jlong>(reinterpret_cast<uintptr_t>(&rt)));
+        static_cast<jlong>(reinterpret_cast<uintptr_t>(&rt)),
+        static_cast<jlong>(deviceEventSinkId));
     if (env->ExceptionCheck()) {
       RNWTM_LOG("buildPlatformManager: installOnWorker THREW");
       env->ExceptionDescribe();
@@ -222,11 +381,16 @@ std::function<void(Runtime&)> installWorkerTurboModules(
 
   // The heavy Java TurboModuleManager is only built when the worker opts in.
   std::shared_ptr<_jobject> manager;
+  long long sinkId = 0;
   if (nativeModules) {
-    manager = buildPlatformManager(rt, workerInvoker);
+    // Registered BEFORE the manager, because building it constructs the worker's
+    // ReactContext, which needs the id to serve module events from this worker.
+    sinkId = registerWorkerDeviceEventSink(workerInvoker);
+    manager = buildPlatformManager(rt, workerInvoker, sinkId);
   }
 
   if (!manager) {
+    unregisterWorkerDeviceEventSink(sinkId);
     // Default / not-ready / failure: lightweight Cxx-only path. Nothing to tear
     // down (dies with the runtime).
     installCxxOnly(rt, std::move(workerInvoker));
@@ -241,7 +405,12 @@ std::function<void(Runtime&)> installWorkerTurboModules(
   // still alive (its modules hold jsi refs). Runs inside the WithClassLoader
   // body, so JNI is available. `manager` is released when this callback is
   // destroyed (its deleter is thread-safe).
-  return [manager](Runtime&) {
+  //
+  // The sink is dropped FIRST: a module may emit from its own thread while we're
+  // invalidating, and dropping the sink makes that a no-op instead of a post onto
+  // a runtime that is about to be destroyed.
+  return [manager, sinkId](Runtime&) {
+    unregisterWorkerDeviceEventSink(sinkId);
     JNIEnv* env = facebook::jni::Environment::current();
     jclass cls = env->GetObjectClass(manager.get());
     jmethodID invalidate = env->GetMethodID(cls, "invalidate", "()V");

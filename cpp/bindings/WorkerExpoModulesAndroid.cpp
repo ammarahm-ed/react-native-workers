@@ -19,6 +19,7 @@
 #if defined(__ANDROID__)
 
 #include "WorkerExpoModules.h"
+#include "WorkerTurboModules.h"
 
 #include <fbjni/fbjni.h>
 
@@ -111,7 +112,7 @@ std::function<void()> installExpoOnAndroidWorker(
         "installOnWorker",
         "(Lcom/facebook/react/bridge/RuntimeExecutor;"
         "Lcom/facebook/react/turbomodule/core/CallInvokerHolderImpl;"
-        "J)"
+        "JJ)"
         "Ljava/lang/Object;");
     if (!install) {
       RNWEXPO_ALOG("installOnWorker: methodID NOT FOUND (signature mismatch)");
@@ -119,20 +120,28 @@ std::function<void()> installExpoOnAndroidWorker(
       return {};
     }
 
+    // The Expo AppContext builds its own worker ReactContext, so it needs its own
+    // device-event target too — an Expo module using the legacy `emitDeviceEvent`
+    // path must not reach the host runtime either.
+    long long sinkId = registerWorkerDeviceEventSink(workerInvoker);
+
     jobject handleLocal = env->CallStaticObjectMethod(
         cls,
         install,
         reHolder.get(),
         ciHolder.get(),
-        static_cast<jlong>(reinterpret_cast<uintptr_t>(&rt)));
+        static_cast<jlong>(reinterpret_cast<uintptr_t>(&rt)),
+        static_cast<jlong>(sinkId));
     if (env->ExceptionCheck()) {
       RNWEXPO_ALOG("installOnWorker: THREW");
       env->ExceptionDescribe();
       env->ExceptionClear();
+      unregisterWorkerDeviceEventSink(sinkId);
       return {};
     }
     if (!handleLocal) {
       RNWEXPO_ALOG("installOnWorker: returned null (install failed)");
+      unregisterWorkerDeviceEventSink(sinkId);
       return {};
     }
     RNWEXPO_ALOG("installOnWorker: global.expo installed against worker runtime");
@@ -143,7 +152,8 @@ std::function<void()> installExpoOnAndroidWorker(
     // Teardown thunk: run on the worker JS thread in Worker.cpp's setPreDestroy
     // (runtime still alive). Releases the per-worker AppContext (Kotlin onDestroy)
     // and unbinds the worker runtime's JSIContext — both must run on this thread.
-    return [handle]() {
+    return [handle, sinkId]() {
+      unregisterWorkerDeviceEventSink(sinkId);
       try {
         facebook::jni::ThreadScope ts;
         auto cls = facebook::jni::findClassStatic(kBridgeClass);
