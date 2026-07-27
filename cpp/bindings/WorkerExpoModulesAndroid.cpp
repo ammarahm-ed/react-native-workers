@@ -3,9 +3,9 @@
 // expo-modules-core's own JNI (`JSIContext.installJSIForBridgeless`) install
 // `global.expo` against the worker runtime.
 //
-// Unlike iOS — where the Swift↔C++ boundary blocks a per-worker AppContext, so we
-// hand-roll a forwarding host object — Android's install entry point takes a RAW
-// jsi::Runtime pointer + a RuntimeExecutor. We already build those per worker for
+// Both platforms now build a REAL per-worker AppContext (iOS does it through
+// ExpoRuntime + the Swift factory — see ios/WorkerExpoModules.mm). Android's
+// install entry point takes a RAW jsi::Runtime pointer + a RuntimeExecutor. We already build those per worker for
 // TurboModules (WorkerTurboModulesAndroid.cpp), so here we build the same worker
 // holders and pass them to the Kotlin bridge `WorkerExpoModules.installOnWorker`,
 // which constructs the AppContext and installs Expo entirely through Expo's own

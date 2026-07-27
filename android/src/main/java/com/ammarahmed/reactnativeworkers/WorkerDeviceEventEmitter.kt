@@ -109,9 +109,30 @@ internal class WorkerDeviceEventEmitter(private val sinkId: Long) {
       is ReadableArray -> args.pushArray(data)
       is String -> args.pushString(data)
       is Boolean -> args.pushBoolean(data)
+      // Long is not representable as a double beyond 2^53; RN's own bridge has
+      // the same limit, but say so rather than losing it silently.
+      is Long ->
+        if (data > 9007199254740991L || data < -9007199254740991L) {
+          android.util.Log.w(
+            "RNWorkerTM",
+            "device event '$eventName': Long $data exceeds JS safe-integer range",
+          )
+          args.pushDouble(data.toDouble())
+        } else {
+          args.pushDouble(data.toDouble())
+        }
       is Number -> args.pushDouble(data.toDouble())
       is Bundle -> args.pushMap(Arguments.fromBundle(data))
-      else -> args.pushString(data.toString())
+      // RN throws on an unsupported payload type; stringifying it invented data
+      // the listener never sent. Drop the payload and say why.
+      else -> {
+        android.util.Log.w(
+          "RNWorkerTM",
+          "device event '$eventName': unsupported payload type " +
+            "${data.javaClass.name}; delivering null",
+        )
+        args.pushNull()
+      }
     }
     nativeEmit(sinkId, eventName, args)
   }

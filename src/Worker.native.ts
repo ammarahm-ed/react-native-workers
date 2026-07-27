@@ -29,6 +29,40 @@ let installed = false;
 declare const globalThis: any;
 declare const fetch: any;
 
+/**
+ * Mirrors the native validation (cpp/core/MessageCodec.cpp) for the queued case.
+ * Only the checks that need no runtime: type, duplicates, already-transferred.
+ */
+function assertTransferable(transfer: any[]): void {
+  if (!Array.isArray(transfer) || transfer.length === 0) return;
+  const seen: any[] = [];
+  for (const item of transfer) {
+    const isArrayBuffer =
+      item != null &&
+      typeof item === 'object' &&
+      Object.prototype.toString.call(item) === '[object ArrayBuffer]';
+    if (!isArrayBuffer) {
+      throw new Error(
+        "Failed to execute 'postMessage': the transfer list contains a value " +
+          'that is not a transferable object.'
+      );
+    }
+    if ((item as any).detached === true) {
+      throw new Error(
+        "Failed to execute 'postMessage': an ArrayBuffer in the transfer list " +
+          'has already been transferred.'
+      );
+    }
+    if (seen.indexOf(item) !== -1) {
+      throw new Error(
+        "Failed to execute 'postMessage': an ArrayBuffer appears twice in the " +
+          'transfer list.'
+      );
+    }
+    seen.push(item);
+  }
+}
+
 function ensureInstalled(): void {
   if (installed) return;
   NativeReactNativeWorkers.install();
@@ -195,10 +229,22 @@ export class Worker {
     );
     registry.set(this._id, (type, payload) => this.__deliver(type, payload));
     // Flush anything queued before the worker existed.
-    for (const m of this._pending) {
-      globalThis.__RNWorkersPostMessage(this._id, m.data, m.transfer);
-    }
+    //
+    // Each send is guarded and the queue is ALWAYS cleared. A throwing encode
+    // (a DataCloneError from a transfer list) used to escape this loop into the
+    // caller's `.catch`, where it was reported as "Failed to load worker bundle"
+    // and left the rest of the queue undelivered while the worker looked healthy.
+    const pending = this._pending;
     this._pending = [];
+    for (const m of pending) {
+      try {
+        globalThis.__RNWorkersPostMessage(this._id, m.data, m.transfer);
+      } catch (err) {
+        this.__deliver('messageerror', {
+          message: String((err as any)?.message ?? err),
+        });
+      }
+    }
   }
 
   // ---- JSModule bridge (typed two-way RPC) ----
@@ -229,6 +275,12 @@ export class Worker {
   postMessage(data: any, transfer: any[] = []): void {
     if (this._terminated) return;
     if (this._id == null) {
+      // A file worker in dev only gets its id after its bundle is fetched, so
+      // early messages queue. Validate the transfer list NOW anyway: the spec
+      // says postMessage throws DataCloneError synchronously, and deferring it
+      // to the flush made the same call throw or not depending on whether the
+      // worker happened to exist yet.
+      assertTransferable(transfer);
       this._pending.push({ data, transfer });
       return;
     }

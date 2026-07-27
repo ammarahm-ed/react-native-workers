@@ -120,6 +120,10 @@ object WorkerTurboModules {
       "AccessibilityInfo",
       "DeviceEventManager",
       "BlobModule",
+      // TimingModule resolves JSTimers through getJSModule, which is the host's
+      // — so a worker's timers would be driven from the host runtime. Workers
+      // have their own timers from the prelude and need this module never.
+      "Timing",
     )
 
   /**

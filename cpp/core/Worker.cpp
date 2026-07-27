@@ -134,17 +134,19 @@ void Worker::start(std::string code, std::string sourceUrl) {
             installWorkerTurboModules(rt, workerInvoker, nativeModules);
         // When a worker opts into native modules AND the app is an Expo app,
         // install the Expo Modules API (`global.expo` + `requireNativeModule`) into
-        // this worker runtime. No-op on non-Expo apps. Platform strategies differ:
-        //  * iOS (ios/WorkerExpoModules.mm): install OUR OWN host object built in
-        //    the WORKER runtime that forwards each call natively via the app's
-        //    shared AppContext — the Swift↔C++ boundary blocks a per-worker
-        //    AppContext there, so nothing may cross runtimes.
-        //  * Android (cpp/bindings/WorkerExpoModulesAndroid.cpp): build a real
-        //    per-worker Expo AppContext and let Expo's own `installJSIForBridgeless`
-        //    install `global.expo` against the WORKER runtime — Android's JNI install
-        //    takes a raw runtime pointer + CallInvoker, so full native reuse works.
-        // The installer returns a teardown thunk (Android: release the per-worker
-        // AppContext; iOS: none) run on the worker thread in setPreDestroy below.
+        // this worker runtime. No-op on non-Expo apps.
+        //
+        // BOTH platforms build a real per-worker Expo AppContext, so Expo's own
+        // code installs `global.expo` against the WORKER runtime and nothing has
+        // to cross runtimes:
+        //  * iOS (ios/WorkerExpoModules.mm): an `ExpoRuntime` wrapping this
+        //    worker's runtime is handed to a Swift factory, and assigning it to
+        //    AppContext._runtime runs Expo's own prepareRuntime(). Falls back to
+        //    the legacy forwarding host object on an SDK without `EXRuntime`.
+        //  * Android (cpp/bindings/WorkerExpoModulesAndroid.cpp): Expo's JNI
+        //    install takes a raw runtime pointer + CallInvoker directly.
+        // The installer returns a teardown thunk — releasing the per-worker
+        // AppContext — run on the worker thread in setPreDestroy below.
         std::function<void()> expoCleanup;
         if (nativeModules) {
           expoCleanup = installExpoModulesInWorker(rt, workerInvoker);

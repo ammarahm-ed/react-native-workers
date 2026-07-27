@@ -90,7 +90,14 @@ internal abstract class WorkerReactContext(
   // would hand the work to a thread shared with the host.
 
   override fun isOnNativeModulesQueueThread(): Boolean =
-    WorkerNativeQueue.isOnQueue(nativeQueueId) || super.isOnNativeModulesQueueThread()
+    if (nativeQueueId != 0L) {
+      // This worker HAS its own queue, so the host's answer is not merely
+      // irrelevant — ORing it in reported true on the host's NativeModules
+      // thread, masking exactly the shared-thread dependency the queue removes.
+      WorkerNativeQueue.isOnQueue(nativeQueueId)
+    } else {
+      super.isOnNativeModulesQueueThread()
+    }
 
   override fun assertOnNativeModulesQueueThread() {
     if (!isOnNativeModulesQueueThread()) super.assertOnNativeModulesQueueThread()

@@ -826,9 +826,13 @@ export default function TestsScreen() {
             name: 'native module body runs off the worker JS thread',
             pass:
               nativeQueue?.ok === true &&
-              // the read was real work, and the JS thread sat out nearly all of it
+              // The read was real work, and the JS thread sat out nearly all of
+              // it. Ratio-based: Date.now() has 1ms resolution and this runs
+              // right after an 8 MiB string build, so an absolute floor of a few
+              // ms fails on a cold emulator for reasons unrelated to the feature.
               nativeQueue.totalMs > 15 &&
-              nativeQueue.syncMs <= 5,
+              nativeQueue.syncMs * 5 < nativeQueue.totalMs &&
+              nativeQueue.syncMs <= 25,
             detail: JSON.stringify(nativeQueue),
           });
         }
@@ -874,6 +878,9 @@ export default function TestsScreen() {
             sharedPost.byteLength === 4096,
           detail: JSON.stringify(sharedPost),
         });
+        // Named buffers are process-global; leaving each suite run's behind would
+        // pin its pages for the life of the app.
+        SharedBuffer.delete(sharedPost?.name ?? '');
 
         // Transferable ArrayBuffers, round trip. Measures each hop rather than
         // assuming: Hermes only shares the store of an `external()` buffer, so a
@@ -943,7 +950,6 @@ export default function TestsScreen() {
             resolve({ __threw: String((err as any)?.message ?? err) });
           }
         });
-        console.log('[TRANSFER-PROBE]', JSON.stringify(transferProbe));
         all.push({
           name: 'transferable ArrayBuffer (zero-copy + round trip + detach)',
           pass:
@@ -960,7 +966,13 @@ export default function TestsScreen() {
             transferProbe?.externalHop?.senderDetached === true &&
             transferProbe?.plainHop?.senderDetached === true &&
             // a detached buffer can no longer be cloned (spec DataCloneError)
-            transferProbe?.reuseThrew === true,
+            transferProbe?.reuseThrew === true &&
+            // the allocator exists (otherwise "external" was a plain buffer and
+            // the zero-copy assertion above proved nothing)
+            transferProbe?.hasAllocator === true &&
+            // and a plain ArrayBuffer must NOT be zero-copy on this engine, so a
+            // regression that made everything copy cannot pass unnoticed
+            transferProbe?.plainHop?.outboundZeroCopy === false,
           detail: JSON.stringify(transferProbe),
         });
 
@@ -1123,6 +1135,35 @@ export default function TestsScreen() {
             // ...and not one of its events was dispatched on the host runtime
             eventIsolation.hostSaw === 0,
           detail: JSON.stringify(eventIsolation),
+        });
+
+        // performance.now() exists in a worker and behaves. It had no test:
+        // coverage was incidental via XHR, which can skip entirely.
+        const perf = await once(
+          `self.onmessage = function () {
+             var t0 = performance.now();
+             var spin = Date.now() + 30;
+             while (Date.now() < spin) {}
+             var t1 = performance.now();
+             self.postMessage({
+               hasPerformance: typeof performance === 'object',
+               nowIsNumber: typeof t0 === 'number',
+               advanced: t1 - t0,
+               originIsNumber: typeof performance.timeOrigin === 'number',
+             });
+           };`,
+          'go'
+        );
+        all.push({
+          name: 'performance.now() in a worker',
+          pass:
+            perf?.hasPerformance === true &&
+            perf.nowIsNumber === true &&
+            perf.originIsNumber === true &&
+            // it moved forward across ~30ms of spinning, and not absurdly
+            perf.advanced >= 20 &&
+            perf.advanced < 5000,
+          detail: JSON.stringify(perf),
         });
 
         // JSModule bridge suite (typed two-way RPC, events, SharedStore params).
