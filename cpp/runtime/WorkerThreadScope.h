@@ -24,4 +24,30 @@ void setWorkerThreadScopeRunner(ThreadScopeRunner runner);
 // Run `body` via the registered runner, or directly if none is registered.
 void runInWorkerThreadScope(const std::function<void()>& body);
 
+// Autorelease-pool control for a worker thread (Apple only; no-ops elsewhere).
+//
+// A worker thread is a raw std::thread, so ObjC temporaries it creates land in
+// the thread's TOP-LEVEL autorelease pool, which only drains at pthread_exit —
+// i.e. AFTER the worker body has already destroyed its jsi::Runtime. Expo's
+// per-worker AppContext puts EXJavaScriptValue objects (each holding a jsi::Value)
+// in exactly that pool, so the drain ran ~Value against a dead runtime and
+// segfaulted during teardown.
+//
+// The worker body therefore owns a pool explicitly: pushed on entry, popped
+// deliberately once teardown has finished but while the runtime is STILL alive.
+void* pushWorkerAutoreleasePool();
+void popWorkerAutoreleasePool(void* token);
+
+// Platform hook registration.
+using AutoreleasePoolPush = void* (*)();
+using AutoreleasePoolPop = void (*)(void*);
+void setWorkerAutoreleasePoolHooks(AutoreleasePoolPush push, AutoreleasePoolPop pop);
+
+#if defined(__APPLE__)
+// Installs the Apple hooks (ios/WorkerAutoreleasePoolApple.mm). MUST be called,
+// not left to a load-time constructor: this pod is a static archive and the
+// linker drops object files nothing references.
+void installAppleAutoreleasePoolHooks();
+#endif
+
 } // namespace facebook::react::workers

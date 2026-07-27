@@ -212,6 +212,14 @@ void HermesWorkerHost::threadMain(
   // classes for the worker's entire lifetime (see WorkerThreadScope.h). Non-
   // Android platforms run the body directly.
   runInWorkerThreadScope([&]() {
+#if defined(__APPLE__)
+  // Referencing this is also what keeps the .mm defining it in the binary.
+  installAppleAutoreleasePoolHooks();
+#endif
+  // Owns this thread's autorelease pool for the whole worker body. Popped
+  // explicitly at teardown, BEFORE the runtime is destroyed — see
+  // WorkerThreadScope.h for why the thread's implicit pool is too late.
+  void* autoreleasePool = pushWorkerAutoreleasePool();
   ::hermes::vm::RuntimeConfig config =
       ::hermes::vm::RuntimeConfig::Builder()
           .withGCConfig(::hermes::vm::GCConfig::Builder()
@@ -393,6 +401,12 @@ void HermesWorkerHost::threadMain(
     // here on wakes up, sees no runtime, and returns without touching it.
     lock_->runtime = nullptr;
   }
+
+  // Drain every ObjC temporary this worker accumulated while its runtime is still
+  // alive. Anything holding a jsi::Value (Expo's EXJavaScriptValue wrappers) is
+  // released here rather than at pthread_exit, which happens after the runtime
+  // below is gone.
+  popWorkerAutoreleasePool(autoreleasePool);
   // `runtime` is destroyed here, on the worker thread.
   });
 }
