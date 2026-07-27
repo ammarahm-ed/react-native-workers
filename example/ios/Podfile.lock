@@ -1916,7 +1916,7 @@ PODS:
     - React-utils (= 0.86.0)
     - ReactNativeDependencies
   - ReactNativeDependencies (0.86.0)
-  - ReactNativeWorkers (1.0.0-alpha.0):
+  - ReactNativeWorkers (1.0.0-alpha.2):
     - hermes-engine
     - RCTRequired
     - RCTTypeSafety
@@ -2295,7 +2295,7 @@ SPEC CHECKSUMS:
   ReactCodegen: afe0d436ee089d7bea6418429d8312b1d23a6801
   ReactCommon: d5c1bb4427bf51c443de5926aac332c89ddd9363
   ReactNativeDependencies: fa0a54b3f5319ae0e3b9aff32bfee7a424b88e66
-  ReactNativeWorkers: 15756200884503cb72377676b69559cf10e28cfd
+  ReactNativeWorkers: a69c650e8aeb4d48200b7ac009766d800e3ca776
   UIWorkerDemo: edbd9533392590797c4fee1ff35047a96edb1abf
   Yoga: fe50ab299e578f397fef753cf309c6703a4db29b
 

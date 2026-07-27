@@ -1,0 +1,1038 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>react-native-workers — launch thread</title>
+<style>
+  :root {
+    --brand: #61dafb;
+    --brand-deep: #06bcee;
+    --ink: #0d0f14;
+    --panel: #16181f;
+    --panel-2: #1c1f27;
+    --line: #272b35;
+    --text: #e7e9ee;
+    --muted: #969cab;
+    --ok: #3fb950;
+    --warn: #f0883e;
+    --bad: #f85149;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    background: var(--ink);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  code, .mono {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  /* ---------------------------------------------------------------- chrome */
+
+  .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 14px 28px;
+    background: rgba(13, 15, 20, .86);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--line);
+  }
+  .topbar h1 {
+    font-size: 15px;
+    font-weight: 650;
+    margin: 0;
+    letter-spacing: -.01em;
+  }
+  .topbar .dot { color: var(--brand); }
+  .topbar .spacer { flex: 1; }
+
+  button.tool {
+    font: inherit;
+    font-size: 13px;
+    font-weight: 550;
+    color: var(--text);
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 7px 13px;
+    cursor: pointer;
+  }
+  button.tool:hover { border-color: #3a4150; background: #232733; }
+  button.tool[aria-pressed="true"] {
+    background: rgba(97, 218, 251, .12);
+    border-color: rgba(97, 218, 251, .5);
+    color: var(--brand);
+  }
+
+  .hint {
+    max-width: 1180px;
+    margin: 26px auto 0;
+    padding: 16px 20px;
+    font-size: 13.5px;
+    line-height: 1.65;
+    color: var(--muted);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+  }
+  .hint b { color: var(--text); font-weight: 600; }
+  .hint kbd {
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+    background: #262a34;
+    border: 1px solid #363c49;
+    border-bottom-width: 2px;
+    border-radius: 5px;
+    padding: 1px 5px;
+  }
+
+  /* ----------------------------------------------------------------- posts */
+
+  main { max-width: 1180px; margin: 0 auto; padding: 26px 20px 120px; }
+
+  .post {
+    margin: 26px 0 44px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    overflow: hidden;
+  }
+
+  .post__head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 13px 18px;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel-2);
+  }
+  .post__num {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--brand);
+  }
+  .post__tag {
+    font-size: 11.5px;
+    color: var(--muted);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 3px 9px;
+  }
+  .post__head .spacer { flex: 1; }
+  .count { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .count.over { color: var(--bad); font-weight: 650; }
+
+  .post__text {
+    padding: 20px 22px;
+    font-size: 17px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    letter-spacing: -.003em;
+  }
+  .post__text .u { color: var(--brand); }
+
+  .post__media {
+    padding: 18px 22px 24px;
+    border-top: 1px dashed var(--line);
+  }
+  .post__medianote {
+    font-size: 12.5px;
+    color: var(--muted);
+    margin: 0 0 14px;
+  }
+  .post__medianote b { color: #cfd4de; font-weight: 600; }
+
+  /* --------------------------------------------------- 1600x900 card shell */
+
+  .stage {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    overflow: hidden;
+    border-radius: 10px;
+    border: 1px solid var(--line);
+  }
+  .stage > .card {
+    transform-origin: top left;
+    /* scaled by JS to fit the stage width */
+  }
+
+  .card {
+    width: 1600px;
+    height: 900px;
+    position: relative;
+    overflow: hidden;
+    color: #fff;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+    /* deep navy → indigo base; the glow layer paints brand light on top */
+    background:
+      linear-gradient(150deg, #0e1626 0%, #0b1020 38%, #120e24 68%, #0a0d16 100%);
+  }
+  /* a hairline of brand light along the top edge ties the set together */
+  .card::after {
+    content: "";
+    position: absolute;
+    inset: 0 0 auto;
+    height: 3px;
+    background: linear-gradient(90deg, transparent, #61dafb 22%, #7aa2ff 52%, #a06bf0 78%, transparent);
+    opacity: .85;
+    z-index: 4;
+  }
+
+  /* shared card furniture */
+  .card__glow {
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(1100px 720px at 12% -8%, rgba(97, 218, 251, .26), transparent 60%),
+      radial-gradient(900px 640px at 96% 108%, rgba(148, 96, 240, .28), transparent 58%),
+      radial-gradient(760px 520px at 78% 4%, rgba(72, 118, 255, .18), transparent 62%);
+  }
+  .card__lanes {
+    position: absolute;
+    inset: 0;
+    background-image: repeating-linear-gradient(
+      180deg,
+      rgba(255, 255, 255, .045) 0 1px,
+      transparent 1px 72px
+    );
+    mask-image: linear-gradient(180deg, transparent, #000 22%, #000 78%, transparent);
+  }
+  .card__mark {
+    position: absolute;
+    left: 88px;
+    bottom: 54px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 21px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, .62);
+    letter-spacing: -.01em;
+  }
+  .card__mark img { width: 34px; height: 34px; border-radius: 8px; }
+
+  .card__body {
+    position: relative;
+    height: 100%;
+    display: grid;
+    grid-template-columns: 1fr 470px;
+    align-items: center;
+    gap: 70px;
+    padding: 0 88px;
+  }
+  .eyebrow {
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--brand);
+    margin: 0 0 26px;
+  }
+  .headline {
+    font-size: 68px;
+    line-height: 1.05;
+    font-weight: 700;
+    letter-spacing: -.03em;
+    margin: 0 0 26px;
+  }
+  .headline em { font-style: normal; color: var(--brand); }
+  .sub {
+    font-size: 27px;
+    line-height: 1.45;
+    color: rgba(255, 255, 255, .66);
+    margin: 0;
+    max-width: 20ch;
+  }
+  .sub b { color: #fff; font-weight: 600; }
+
+  /* ------------------------------------------------------- iPhone 17 Pro */
+
+  .phone {
+    position: relative;
+    width: 376px;
+    height: 812px;
+    border-radius: 56px;
+    padding: 9px;
+    justify-self: center;
+    background:
+      linear-gradient(150deg, #8e8e93 0%, #3a3a3c 22%, #1c1c1e 48%, #48484a 72%, #8e8e93 100%);
+    box-shadow:
+      0 2px 0 rgba(255, 255, 255, .35) inset,
+      0 60px 90px -30px rgba(0, 0, 0, .85),
+      0 0 0 1px rgba(0, 0, 0, .6);
+  }
+  .phone::after {
+    /* inner bezel highlight */
+    content: "";
+    position: absolute;
+    inset: 6px;
+    border-radius: 50px;
+    box-shadow: 0 0 0 1.5px rgba(0, 0, 0, .9);
+    pointer-events: none;
+  }
+  .phone__screen {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    border-radius: 48px;
+    overflow: hidden;
+    background: #000;
+  }
+  .phone__screen > video,
+  .phone__screen > img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .phone__island {
+    position: absolute;
+    top: 13px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 106px;
+    height: 32px;
+    border-radius: 20px;
+    background: #000;
+    z-index: 3;
+  }
+
+  /* --------------------------------------------------------- hero (post 1) */
+
+  .card--hero {
+    background:
+      linear-gradient(160deg, #101d33 0%, #0b1226 32%, #150e2c 62%, #090b14 100%);
+  }
+  .hero__field { position: absolute; inset: 0; overflow: hidden; }
+  .hero__field .lane {
+    position: absolute;
+    left: -10%;
+    width: 120%;
+    height: 2px;
+    background: rgba(255, 255, 255, .05);
+    overflow: visible;
+  }
+  .hero__field .lane::before {
+    content: "";
+    position: absolute;
+    top: -1px;
+    left: 0;
+    width: 240px;
+    height: 4px;
+    border-radius: 4px;
+    background: linear-gradient(90deg, transparent, var(--brand), transparent);
+    filter: blur(.4px);
+    opacity: .85;
+    animation: run linear infinite;
+  }
+  .hero__field .lane::after {
+    content: "";
+    position: absolute;
+    top: -5px;
+    left: 0;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 0 22px 6px rgba(97, 218, 251, .85);
+    animation: run linear infinite;
+  }
+  @keyframes run {
+    from { transform: translateX(-260px); }
+    to   { transform: translateX(1700px); }
+  }
+  .hero__grid {
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(255, 255, 255, .028) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, .028) 1px, transparent 1px);
+    background-size: 64px 64px;
+    mask-image: radial-gradient(900px 560px at 50% 46%, #000 20%, transparent 78%);
+  }
+  .hero__vignette {
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(820px 560px at 50% 42%, rgba(97, 218, 251, .26), transparent 66%),
+      radial-gradient(700px 520px at 12% 8%, rgba(72, 118, 255, .22), transparent 62%),
+      radial-gradient(760px 560px at 90% 92%, rgba(160, 107, 240, .24), transparent 60%),
+      radial-gradient(1300px 760px at 50% 124%, rgba(7, 9, 15, .95), transparent 62%);
+  }
+  .hero__center {
+    position: relative;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+  }
+  .hero__logo {
+    width: 188px;
+    height: 188px;
+    border-radius: 42px;
+    box-shadow: 0 30px 70px -18px rgba(0, 0, 0, .9), 0 0 0 1px rgba(255, 255, 255, .07);
+  }
+  .hero__word {
+    margin: 40px 0 0;
+    font-size: 76px;
+    font-weight: 700;
+    letter-spacing: -.035em;
+    text-align: center;
+  }
+  .hero__tag {
+    margin: 18px 0 0;
+    font-size: 29px;
+    font-weight: 450;
+    letter-spacing: .0em;
+    color: rgba(255, 255, 255, .62);
+    text-align: center;
+  }
+  .hero__tag b { color: var(--brand); font-weight: 600; }
+
+  /* ---------------------------------------------------------- code cards */
+
+  .card--code .card__body {
+    grid-template-columns: 1fr;
+    padding: 0 96px;
+    gap: 0;
+  }
+  .win {
+    width: 100%;
+    border-radius: 18px;
+    background: rgba(10, 14, 24, .82);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(120, 140, 190, .22);
+    box-shadow: 0 44px 90px -30px rgba(0, 0, 0, .9);
+    overflow: hidden;
+  }
+  .win__bar {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 15px 20px;
+    background: rgba(24, 32, 50, .78);
+    border-bottom: 1px solid rgba(120, 140, 190, .18);
+  }
+  .win__bar i {
+    width: 13px; height: 13px; border-radius: 50%;
+    background: #3d4351; display: block;
+  }
+  .win__name {
+    margin-left: 10px;
+    font-size: 17px;
+    color: #7d8494;
+    font-family: ui-monospace, monospace;
+  }
+  .win pre {
+    margin: 0;
+    padding: 30px 34px 34px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 27px;
+    line-height: 1.62;
+    color: #d7dbe4;
+    letter-spacing: -.01em;
+    overflow: hidden;
+  }
+  .k { color: #c792ea; }
+  .s { color: #7fd88f; }
+  .c { color: #616b7d; font-style: italic; }
+  .f { color: #82aaff; }
+  .n { color: #f78c6c; }
+  .t { color: #ffcb6b; }
+  .codetitle {
+    font-size: 40px;
+    font-weight: 700;
+    letter-spacing: -.025em;
+    margin: 0 0 30px;
+  }
+  .codetitle span { color: var(--brand); }
+
+  /* ------------------------------------------------------------- exporting */
+
+  body.export .topbar,
+  body.export .hint,
+  body.export .post__head,
+  body.export .post__text,
+  body.export .post__medianote { display: none; }
+  body.export main { max-width: none; padding: 0; }
+  body.export .post {
+    margin: 0 0 40px;
+    border: 0;
+    border-radius: 0;
+    background: none;
+  }
+  body.export .post__media { padding: 0; border: 0; }
+  body.export .stage {
+    width: 1600px;
+    height: 900px;
+    aspect-ratio: auto;
+    border: 0;
+    border-radius: 0;
+  }
+  body.export .stage > .card { transform: none !important; }
+  body.export .post--nomedia { display: none; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1>react-native-workers <span class="dot">/</span> launch thread</h1>
+  <span class="post__tag">12 posts</span>
+  <div class="spacer"></div>
+  <button class="tool" id="exportBtn" aria-pressed="false">Export mode (1600×900, 1:1)</button>
+</div>
+
+<div class="hint">
+  <b>How to use this.</b> Each post below shows the exact text to paste and the media card that goes with it.
+  Every card is <b>1600 × 900</b> — X's 16:9 slot — so nothing gets cropped in the timeline.
+  <br /><br />
+  <b>To capture a card:</b> hit <b>Export mode</b> (renders every card at true 1:1 with all the page chrome stripped), then
+  <kbd>⌘</kbd><kbd>⇧</kbd><kbd>4</kbd> → <kbd>Space</kbd> and click the card — on a Retina display that grabs it at 3200×1800, which is plenty.
+  Videos autoplay and loop here; for the three video posts, screen-record the card instead (<kbd>⌘</kbd><kbd>⇧</kbd><kbd>5</kbd>) or just upload the
+  source <code>.mp4</code> directly and skip the frame.
+  <br /><br />
+  <b>Character counts</b> are live next to each post. X counts any URL as 23 characters no matter its length — that's already accounted for.
+</div>
+
+<main>
+
+  <!-- ============================================================ POST 1 -->
+  <section class="post">
+    <div class="post__head">
+      <span class="post__num">Post 1</span>
+      <span class="post__tag">hook · no link</span>
+      <div class="spacer"></div>
+      <span class="count" data-count></span>
+    </div>
+    <div class="post__text" data-text>React Native is single-threaded where it matters most.
+
+Parse a big payload, hash a file, filter an image — it all competes with your UI for the same runtime.
+
+react-native-workers brings real background threads to RN, behind the Worker API you already know.
+
+Public alpha today 🧵</div>
+    <div class="post__media">
+      <p class="post__medianote"><b>Card:</b> animated worker field + logo + wordmark. No link in this post, by design.</p>
+      <div class="stage">
+        <div class="card card--hero">
+          <div class="hero__field" id="heroField"></div>
+          <div class="hero__grid"></div>
+          <div class="hero__vignette"></div>
+          <div class="hero__center">
+            <img class="hero__logo" src="docs/static/img/logo.svg" alt="" />
+            <h2 class="hero__word">react-native-workers</h2>
+            <p class="hero__tag">real multithreading for <b>React&nbsp;Native</b></p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ POST 2 -->
+  <section class="post">
+    <div class="post__head">
+      <span class="post__num">Post 2</span>
+      <span class="post__tag">the API</span>
+      <div class="spacer"></div>
+      <span class="count" data-count></span>
+    </div>
+    <div class="post__text" data-text>If you've used a Web Worker, there is nothing new to learn.
+
+A worker is a normal module that happens to run on its own thread. postMessage in, onmessage out, terminate() when you're done.
+
+That's the whole API surface.</div>
+    <div class="post__media">
+      <p class="post__medianote"><b>Card:</b> code — the two-file hello world.</p>
+      <div class="stage">
+        <div class="card card--code">
+          <div class="card__glow"></div>
+          <div class="card__lanes"></div>
+          <div class="card__body">
+            <div>
+              <h2 class="codetitle">The <span>Worker</span> API you already know</h2>
+              <div class="win">
+                <div class="win__bar"><i></i><i></i><i></i><span class="win__name">App.js</span></div>
+<pre><span class="k">const</span> worker = <span class="k">new</span> <span class="t">Worker</span>(<span class="s">'./workers/heavy'</span>);
+worker.onmessage = (e) =&gt; <span class="f">console</span>.log(e.data);
+worker.<span class="f">postMessage</span>({ items: <span class="n">100_000</span> }); <span class="c">// returns instantly</span>
+
+<span class="c">// workers/heavy.js — its own thread, its own runtime</span>
+self.onmessage = (e) =&gt; self.<span class="f">postMessage</span>(<span class="f">expensiveWork</span>(e.data));</pre>
+              </div>
+            </div>
+          </div>
+          <div class="card__mark"><img src="docs/static/img/logo.svg" alt="" />react-native-workers</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ POST 3 -->
+  <section class="post">
+    <div class="post__head">
+      <span class="post__num">Post 3</span>
+      <span class="post__tag">not worklets</span>
+      <div class="spacer"></div>
+      <span class="count" data-count></span>
+    </div>
+    <div class="post__text" data-text>"Is this Worklets under the hood?"
+
+No — and that's the point.
+
+Each worker is a separate Hermes runtime on its own OS thread: own event loop, own bundle, full import support. A Metro transformer bundles each worker file for you.
+
+Worklets share a runtime. These don't.</div>
+    <div class="post__media">
+      <p class="post__medianote"><b>Card:</b> diagram — one JS thread vs. N real runtimes.</p>
+      <div class="stage">
+        <div class="card">
+          <div class="card__glow"></div>
+          <div class="card__lanes"></div>
+          <div class="card__body" style="grid-template-columns: 1fr; padding: 0 96px;">
+            <div>
+              <p class="eyebrow">Real runtimes, not closures</p>
+              <h2 class="headline" style="font-size:62px; margin-bottom:44px;">One JS thread <em>became n</em></h2>
+              <div style="display:flex; align-items:center; gap:34px;">
+                <div style="flex:0 0 300px; border:1px solid rgba(120,140,190,.24); border-radius:20px; padding:26px 28px; background:rgba(11,15,26,.66);">
+                  <div style="font-size:20px; color:#8b93a4; margin-bottom:14px;">MAIN THREAD</div>
+                  <div style="font-size:31px; font-weight:650; letter-spacing:-.02em;">Your UI</div>
+                  <div style="margin-top:20px; height:8px; border-radius:6px; background:linear-gradient(90deg,#61dafb,#4b8cf7);"></div>
+                  <div style="margin-top:12px; font-size:19px; color:#6f7789;">stays at 60fps</div>
+                </div>
+                <div style="flex:0 0 auto; font-size:34px; color:#4b5364;">⇄</div>
+                <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:22px; flex:1;">
+                  <div style="border:1px solid rgba(120,140,190,.24); border-radius:20px; padding:24px; background:rgba(11,15,26,.66);">
+                    <div style="font-size:19px; color:#8b93a4;">WORKER 1</div>
+                    <div style="font-size:25px; font-weight:600; margin-top:10px;">Hermes runtime</div>
+                    <div style="font-size:18px; color:#6f7789; margin-top:8px;">own event loop</div>
+                  </div>
+                  <div style="border:1px solid rgba(120,140,190,.24); border-radius:20px; padding:24px; background:rgba(11,15,26,.66);">
+                    <div style="font-size:19px; color:#8b93a4;">WORKER 2</div>
+                    <div style="font-size:25px; font-weight:600; margin-top:10px;">Hermes runtime</div>
+                    <div style="font-size:18px; color:#6f7789;margin-top:8px;">own bundle</div>
+                  </div>
+                  <div style="border:1px solid rgba(120,140,190,.24); border-radius:20px; padding:24px; background:rgba(11,15,26,.66);">
+                    <div style="font-size:19px; color:#8b93a4;">WORKER n</div>
+                    <div style="font-size:25px; font-weight:600; margin-top:10px;">Hermes runtime</div>
+                    <div style="font-size:18px; color:#6f7789;margin-top:8px;">own GC + heap cap</div>
+                  </div>
+                </div>
+              </div>
+              <p class="sub" style="max-width:none; margin-top:38px; font-size:25px;">
+                Nothing is shared implicitly. Messages cross via <b>structured clone</b>; each worker gets its own <b>CallInvoker</b>, so async native work resolves on <b>the worker's own thread</b>.
+              </p>
+            </div>
+          </div>
+          <div class="card__mark"><img src="docs/static/img/logo.svg" alt="" />react-native-workers</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ POST 4 -->
+  <section class="post">
+    <div class="post__head">
+      <span class="post__num">Post 4</span>
+      <span class="post__tag">expo modules</span>
+      <div class="spacer"></div>
+      <span class="count" data-count></span>
+    </div>
+    <div class="post__text" data-text>A thread that can only do math is useful. One that reaches the native side is a different tool.
+
+C++/JSI modules work in every worker. Your app's Java/ObjC TurboModules are a flag away.
+
+And Expo Modules run inside a worker — iOS and Android. Constants, sync + async fns, events.</div>
+    <div class="post__media">
+      <p class="post__medianote"><b>Card:</b> code — <code>requireNativeModule</code> inside a worker.</p>
+      <div class="stage">
+        <div class="card card--code">
+          <div class="card__glow"></div>
+          <div class="card__lanes"></div>
+          <div class="card__body">
+            <div>
+              <h2 class="codetitle">Expo Modules, <span>inside a worker</span></h2>
+              <div class="win">
+                <div class="win__bar"><i></i><i></i><i></i><span class="win__name">workers/probe.js</span></div>
+<pre><span class="k">const</span> Device = <span class="f">requireNativeModule</span>(<span class="s">'ExpoDevice'</span>);
+Device.osName;                        <span class="c">// constants</span>
+<span class="k">await</span> Device.<span class="f">getDeviceTypeAsync</span>();      <span class="c">// async fns</span>
+
+<span class="k">const</span> Crypto = <span class="f">requireNativeModule</span>(<span class="s">'ExpoCrypto'</span>);
+Crypto.<span class="f">randomUUID</span>();                  <span class="c">// sync — a value, not a Promise</span>
+Foo.<span class="f">addListener</span>(<span class="s">'onX'</span>, handle);      <span class="c">// module events, in the worker</span></pre>
+              </div>
+              <p class="sub" style="max-width:none; margin-top:30px; font-size:24px;">
+                iOS forwards each call natively through Expo's <b>AppContext</b>. Android builds a genuine <b>per-worker AppContext</b>. Same code either way.
+              </p>
+            </div>
+          </div>
+          <div class="card__mark"><img src="docs/static/img/logo.svg" alt="" />react-native-workers</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ POST 5 -->
+  <section class="post">
+    <div class="post__head">
+      <span class="post__num">Post 5</span>
+      <span class="post__tag">video · UIWorker</span>
+      <div class="spacer"></div>
+      <span class="count" data-count></span>
+    </div>
+    <div class="post__text" data-text>UIWorker goes further: worker code can render and update native components, with events delivered natively instead of round-tripping the main JS thread.
+
+Here's a 60fps loop driven from a UIWorker — still animating while the app's JS thread is blocked for two full seconds.</div>
+    <div class="post__media">
+      <p class="post__medianote"><b>Media:</b> <code>docs/static/img/video/uiworker-animate.mp4</code> — screen-record this card, or upload the raw mp4.</p>
+      <div class="stage">
+        <div class="card">
+          <div class="card__glow"></div>
+          <div class="card__lanes"></div>
+          <div class="card__body">
+            <div>
+              <p class="eyebrow">UIWorker</p>
+              <h2 class="headline">60fps, while<br />JS is <em>blocked</em></h2>
+              <p class="sub">A worker's own render loop writing a view's transform directly — it keeps running through a <b>2000ms</b> block on the main JS thread.</p>
+            </div>
+            <div class="phone">
+              <div class="phone__screen">
+                <div class="phone__island"></div>
+                <video src="docs/static/img/video/uiworker-animate.mp4" autoplay loop muted playsinline></video>
+              </div>
+            </div>
+          </div>
+          <div class="card__mark"><img src="docs/static/img/logo.svg" alt="" />react-native-workers</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ POST 6 -->
+  <section class="post">
+    <div class="post__head">
+      <span class="post__num">Post 6</span>
+      <span class="post__tag">image · native components</span>
+      <div class="spacer"></div>
+      <span class="count" data-count></span>
+    </div>
+    <div class="post__text" data-text>And yes — that's a real MKMapView with custom pins, whose view manager is written in JavaScript and registered from inside a UIWorker.
+
+No native code. No codegen.</div>
+    <div class="post__media">
+      <p class="post__medianote"><b>Media:</b> <code>docs/static/img/screens/nativecomponent.webp</code></p>
+      <div class="stage">
+        <div class="card">
+          <div class="card__glow"></div>
+          <div class="card__lanes"></div>
+          <div class="card__body">
+            <div>
+              <p class="eyebrow">Native components from JS</p>
+              <h2 class="headline">A view manager<br />written in <em>JavaScript</em></h2>
+              <p class="sub">A live <b>MKMapView</b> host component, registered from a UIWorker. No native code, no codegen.</p>
+            </div>
+            <div class="phone">
+              <div class="phone__screen">
+                <div class="phone__island"></div>
+                <img src="docs/static/img/screens/nativecomponent.webp" alt="" />
+              </div>
+            </div>
+          </div>
+          <div class="card__mark"><img src="docs/static/img/logo.svg" alt="" />react-native-workers</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ POST 7 -->
+  <section class="post">
+    <div class="post__head">
+      <span class="post__num">Post 7</span>
+      <span class="post__tag">video · shared memory</span>
+      <div class="spacer"></div>
+      <span class="count" data-count></span>
+    </div>
+    <div class="post__text" data-text>Messages are great until you're moving a lot of data. So there are primitives that live across runtimes:
+
+SharedStore — observable key/value
+SharedValue — one shared cell
+SharedBuffer — raw shared memory, with a lock
+
+Image filters over pixels in a SharedBuffer. Zero copies.</div>
+    <div class="post__media">
+      <p class="post__medianote"><b>Media:</b> <code>docs/static/img/video/imagefx.mp4</code> — swap for <code>video/sensor.mp4</code> (ring buffer waveform) if you prefer.</p>
+      <div class="stage">
+        <div class="card">
+          <div class="card__glow"></div>
+          <div class="card__lanes"></div>
+          <div class="card__body">
+            <div>
+              <p class="eyebrow">SharedBuffer</p>
+              <h2 class="headline">Shared memory,<br /><em>zero copies</em></h2>
+              <p class="sub">Filters running in a worker straight over pixels in a shared buffer. A <b>250ms</b> blur costs the UI exactly <b>one frame</b>.</p>
+            </div>
+            <div class="phone">
+              <div class="phone__screen">
+                <div class="phone__island"></div>
+                <video src="docs/static/img/video/imagefx.mp4" autoplay loop muted playsinline></video>
+              </div>
+            </div>
+          </div>
+          <div class="card__mark"><img src="docs/static/img/logo.svg" alt="" />react-native-workers</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ POST 8 -->
+  <section class="post">
+    <div class="post__head">
+      <span class="post__num">Post 8</span>
+      <span class="post__tag">experimental · Thread</span>
+      <div class="spacer"></div>
+      <span class="count" data-count></span>
+    </div>
+    <div class="post__text" data-text>The newest piece moves the thread, not the data.
+
+Thread (experimental) lets a worker's runtime run somewhere else for a moment — the main thread, or one you create.
+
+No second runtime. Nothing serialized. Just a closure keeping everything it captured — only the thread changes.</div>
+    <div class="post__media">
+      <p class="post__medianote"><b>Card:</b> code — thread hopping.</p>
+      <div class="stage">
+        <div class="card card--code">
+          <div class="card__glow"></div>
+          <div class="card__lanes"></div>
+          <div class="card__body">
+            <div>
+              <h2 class="codetitle">Move the <span>thread</span>, not the data</h2>
+              <div class="win">
+                <div class="win__bar"><i></i><i></i><i></i><span class="win__name">workers/video.js</span></div>
+<pre><span class="f">enableMultiThreadingExperimental</span>();
+<span class="k">const</span> codec = Thread.<span class="f">create</span>(<span class="s">'codec'</span>);
+
+<span class="k">await</span> codec.<span class="f">run</span>(() =&gt; {
+  <span class="k">const</span> pixels = <span class="f">decodeFrame</span>(bytes);   <span class="c">// on the 'codec' thread</span>
+  Thread.main.<span class="f">run</span>(() =&gt; <span class="f">paint</span>(pixels)); <span class="c">// on the main thread</span>
+});</pre>
+              </div>
+              <p class="sub" style="max-width:none; margin-top:30px; font-size:24px;">
+                Same variables, same objects, same identity. It's <b>thread affinity, not parallelism</b> — one thread is ever inside the runtime.
+              </p>
+            </div>
+          </div>
+          <div class="card__mark"><img src="docs/static/img/logo.svg" alt="" />react-native-workers</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ POST 9 -->
+  <section class="post">
+    <div class="post__head">
+      <span class="post__num">Post 9</span>
+      <span class="post__tag">image · numbers</span>
+      <div class="spacer"></div>
+      <span class="count" data-count></span>
+    </div>
+    <div class="post__text" data-text>Real numbers, on a real phone.
+
+2.58MB of logs parsed across 1 / 2 / 4 / 8 nested workers over one shared buffer: 54ms → 17ms. A 3.18x speedup.
+
+Message round-trips land at 0.016ms. Typed arrays move at 143MB/s.</div>
+    <div class="post__media">
+      <p class="post__medianote"><b>Media:</b> <code>docs/static/img/screens/parse.webp</code> — or <code>screens/benchmarks.webp</code>.</p>
+      <div class="stage">
+        <div class="card">
+          <div class="card__glow"></div>
+          <div class="card__lanes"></div>
+          <div class="card__body">
+            <div>
+              <p class="eyebrow">Parallel parse</p>
+              <h2 class="headline">54ms → 17ms<br />on <em>8 workers</em></h2>
+              <p class="sub">2.58&nbsp;MB of logs, one shared buffer, eight nested workers. A <b>3.18×</b> speedup — on a phone.</p>
+            </div>
+            <div class="phone">
+              <div class="phone__screen">
+                <div class="phone__island"></div>
+                <img src="docs/static/img/screens/parse.webp" alt="" />
+              </div>
+            </div>
+          </div>
+          <div class="card__mark"><img src="docs/static/img/logo.svg" alt="" />react-native-workers</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ POST 10 -->
+  <section class="post">
+    <div class="post__head">
+      <span class="post__num">Post 10</span>
+      <span class="post__tag">image · alpha + install</span>
+      <div class="spacer"></div>
+      <span class="count" data-count></span>
+    </div>
+    <div class="post__text" data-text>It's a 1.0.0-alpha, honestly: file workers load in dev (inline workers work everywhere), structured clone skips Map/Set/RegExp, Thread may change.
+
+But it's tested — RN 0.81→0.86 + Expo SDK 54→57 in CI, and 76/76 on device.
+
+npm i @ammarahmed/react-native-workers@alpha</div>
+    <div class="post__media">
+      <p class="post__medianote"><b>Media:</b> <code>docs/static/img/screens/tests.webp</code></p>
+      <div class="stage">
+        <div class="card">
+          <div class="card__glow"></div>
+          <div class="card__lanes"></div>
+          <div class="card__body">
+            <div>
+              <p class="eyebrow">Public alpha</p>
+              <h2 class="headline">76/76 on device.<br />RN <em>0.81 → 0.86</em></h2>
+              <p class="sub">Every RN and Expo SDK in the matrix builds from scratch in CI. New Architecture, Hermes, iOS&nbsp;+&nbsp;Android.</p>
+              <div style="margin-top:34px; display:inline-flex; align-items:center; gap:14px; padding:18px 26px; border-radius:14px; background:rgba(11,15,26,.66); border:1px solid rgba(120,140,190,.24); font-family:ui-monospace,monospace; font-size:24px; color:#d7dbe4;">
+                <span style="color:#61dafb;">$</span> npm i @ammarahmed/react-native-workers@alpha
+              </div>
+            </div>
+            <div class="phone">
+              <div class="phone__screen">
+                <div class="phone__island"></div>
+                <img src="docs/static/img/screens/tests.webp" alt="" />
+              </div>
+            </div>
+          </div>
+          <div class="card__mark"><img src="docs/static/img/logo.svg" alt="" />react-native-workers</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ POST 11 -->
+  <section class="post post--nomedia">
+    <div class="post__head">
+      <span class="post__num">Post 11</span>
+      <span class="post__tag">blog link · no media</span>
+      <div class="spacer"></div>
+      <span class="count" data-count></span>
+    </div>
+    <div class="post__text" data-text>I wrote the whole thing up — how each worker runtime is created, how Expo modules got working on both platforms, how the shared primitives are built, and what's still rough.
+
+https://ammarahm-ed.github.io/react-native-workers/blog/introducing-react-native-workers</div>
+    <div class="post__media">
+      <p class="post__medianote">No attachment — leave the link to unfurl its own card (that's what <code>workers-social-card.png</code> is for).</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ POST 12 -->
+  <section class="post post--nomedia">
+    <div class="post__head">
+      <span class="post__num">Post 12</span>
+      <span class="post__tag">github link · no media</span>
+      <div class="spacer"></div>
+      <span class="count" data-count></span>
+    </div>
+    <div class="post__text" data-text>It's MIT, and the example app in the repo runs every demo in this thread.
+
+If you're building something that genuinely wants real threads — an importer, an on-device pipeline, a game loop, an editor that shouldn't stutter — I'd love to hear what breaks.
+
+https://github.com/ammarahm-ed/react-native-workers</div>
+    <div class="post__media">
+      <p class="post__medianote">No attachment — let the repo card unfurl.</p>
+    </div>
+  </section>
+
+</main>
+
+<script>
+  // --- animated worker lanes on the hero card -----------------------------
+  const field = document.getElementById('heroField');
+  const LANES = 14;
+  for (let i = 0; i < LANES; i++) {
+    const lane = document.createElement('div');
+    lane.className = 'lane';
+    lane.style.top = (40 + i * 62) + 'px';
+    const dur = (3.6 + (i % 5) * 1.15).toFixed(2) + 's';
+    const delay = (-(i * 0.77) % 6).toFixed(2) + 's';
+    lane.style.setProperty('--d', dur);
+    field.appendChild(lane);
+    // ::before / ::after can't be styled inline — drive them with a rule
+    const style = document.createElement('style');
+    style.textContent =
+      `.hero__field .lane:nth-child(${i + 1})::before,` +
+      `.hero__field .lane:nth-child(${i + 1})::after{animation-duration:${dur};animation-delay:${delay}}`;
+    document.head.appendChild(style);
+  }
+
+  // --- live character counts (X counts every URL as 23) -------------------
+  const URL_RE = /https?:\/\/\S+/g;
+  document.querySelectorAll('.post').forEach((post) => {
+    const text = post.querySelector('[data-text]');
+    const out = post.querySelector('[data-count]');
+    if (!text || !out) return;
+    const raw = text.textContent.trim();
+    const weighted = raw.replace(URL_RE, 'x'.repeat(23));
+    // count by code points so emoji don't over-count
+    const n = [...weighted].length;
+    out.textContent = n + ' / 280';
+    if (n > 280) out.classList.add('over');
+  });
+
+  // --- scale every 1600x900 card down to fit its stage --------------------
+  function fit() {
+    if (document.body.classList.contains('export')) return;
+    document.querySelectorAll('.stage').forEach((stage) => {
+      const card = stage.firstElementChild;
+      if (!card) return;
+      card.style.transform = 'scale(' + (stage.clientWidth / 1600) + ')';
+    });
+  }
+  window.addEventListener('resize', fit);
+  fit();
+
+  // --- URL switches: ?export shows the 1:1 cards, ?only=N isolates one -----
+  const params = new URLSearchParams(location.search);
+  if (params.has('export') || params.has('only')) document.body.classList.add('export');
+  if (params.has('only')) {
+    const want = Number(params.get('only'));
+    document.querySelectorAll('.post').forEach((p, i) => {
+      if (i + 1 !== want) p.style.display = 'none';
+    });
+  }
+
+  // --- export mode --------------------------------------------------------
+  const btn = document.getElementById('exportBtn');
+  btn.addEventListener('click', () => {
+    const on = document.body.classList.toggle('export');
+    btn.setAttribute('aria-pressed', String(on));
+    if (!on) fit();
+  });
+
+  // --- click a post's text to copy it -------------------------------------
+  document.querySelectorAll('[data-text]').forEach((el) => {
+    el.style.cursor = 'copy';
+    el.title = 'Click to copy';
+    el.addEventListener('click', async () => {
+      await navigator.clipboard.writeText(el.textContent.trim());
+      const head = el.previousElementSibling.querySelector('.post__num');
+      const was = head.textContent;
+      head.textContent = 'Copied ✓';
+      setTimeout(() => (head.textContent = was), 1100);
+    });
+  });
+</script>
+
+</body>
+</html>

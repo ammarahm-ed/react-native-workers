@@ -1,0 +1,263 @@
+› Planning build
+› Executing react-native Pods/hermes-engine » [CP-User] [Hermes] Replace Hermes for the right configuration, if needed
+› Executing react-native Pods/ReactNativeDependencies » [CP-User] [RNDeps] Replace React Native Dependencies for the right configuration, if needed
+› Preparing Pods/ExpoFileSystem-ExpoFileSystem_privacy » ResourceBundle-ExpoFileSystem_privacy-ExpoFileSystem-Info.plist
+› Copying   ExpoFileSystem/ExpoFileSystem_privacy.bundle/PrivacyInfo.xcprivacy ➜ node_modules/expo-file-system/ios/PrivacyInfo.xcprivacy
+› Preparing Pods/React-Core-React-Core_privacy » ResourceBundle-React-Core_privacy-React-Core-Info.plist
+› Copying   React-Core/React-Core_privacy.bundle/PrivacyInfo.xcprivacy ➜ node_modules/react-native/React/Resources/PrivacyInfo.xcprivacy
+› Preparing Pods/React-cxxreact-React-cxxreact_privacy » ResourceBundle-React-cxxreact_privacy-React-cxxreact-Info.plist
+› Copying   React-cxxreact/React-cxxreact_privacy.bundle/PrivacyInfo.xcprivacy ➜ node_modules/react-native/ReactCommon/cxxreact/PrivacyInfo.xcprivacy
+› Preparing Pods/EXConstants-ExpoConstants_privacy » ResourceBundle-ExpoConstants_privacy-EXConstants-Info.plist
+› Copying   EXConstants/ExpoConstants_privacy.bundle/PrivacyInfo.xcprivacy ➜ node_modules/expo-constants/ios/PrivacyInfo.xcprivacy
+› Preparing Pods/ExpoDevice-ExpoDevice_privacy » ResourceBundle-ExpoDevice_privacy-ExpoDevice-Info.plist
+› Executing react-native Pods/ReactNativeDependencies » [CP] Copy XCFrameworks
+› Executing react-native Pods/hermes-engine » [CP] Copy XCFrameworks
+› Copying   ExpoDevice/ExpoDevice_privacy.bundle/PrivacyInfo.xcprivacy ➜ node_modules/expo-device/ios/PrivacyInfo.xcprivacy
+› Preparing expo-constants Pods/EXConstants-EXConstants » ResourceBundle-EXConstants-EXConstants-Info.plist
+› Preparing Pods/EXApplication-ExpoApplication_privacy » ResourceBundle-ExpoApplication_privacy-EXApplication-Info.plist
+› Copying   EXApplication/ExpoApplication_privacy.bundle/PrivacyInfo.xcprivacy ➜ node_modules/expo-application/ios/PrivacyInfo.xcprivacy
+› Creating  Pods/React-cxxreact-React-cxxreact_privacy » React-cxxreact_privacy.bundle
+› Creating  Pods/ExpoFileSystem-ExpoFileSystem_privacy » ExpoFileSystem_privacy.bundle
+› Creating  Pods/React-Core-React-Core_privacy » React-Core_privacy.bundle
+› Creating  Pods/ExpoDevice-ExpoDevice_privacy » ExpoDevice_privacy.bundle
+› Creating  Pods/EXConstants-ExpoConstants_privacy » ExpoConstants_privacy.bundle
+› Creating  expo-constants Pods/EXConstants-EXConstants » EXConstants.bundle
+› Creating  Pods/EXApplication-ExpoApplication_privacy » ExpoApplication_privacy.bundle
+› Executing react-native Pods/React-Core-prebuilt » [CP-User] [RNDeps] Replace React Native Core for the right configuration, if needed
+› Executing react-native Pods/React-Core-prebuilt » [CP] Copy XCFrameworks
+› Executing react-native Pods/React-RCTFBReactNativeSpec » [CP-User] [RN]Check FBReactNativeSpec
+› Executing rn-workers-expo-example Pods/ReactCodegen » [CP-User] Generate Specs
+› Compiling rn-workers-expo-example Pods/ReactCodegen » ReactNativeWorkersSpecJSI-generated.cpp
+› Compiling rn-workers-expo-example Pods/ReactCodegen » RCTUnstableModulesRequiringMainQueueSetupProvider.mm
+› Compiling rn-workers-expo-example Pods/ReactCodegen » ReactNativeWorkersSpec-generated.mm
+› Compiling rn-workers-expo-example Pods/ReactCodegen » RCTThirdPartyComponentsProvider.mm
+› Compiling rn-workers-expo-example Pods/ReactCodegen » RCTModulesConformingToProtocolsProvider.mm
+› Compiling rn-workers-expo-example Pods/ReactCodegen » RCTModuleProviders.mm
+› Compiling rn-workers-expo-example Pods/ReactAppDependencyProvider » RCTAppDependencyProvider.mm
+› Compiling rn-workers-expo-example Pods/ReactAppDependencyProvider » ReactAppDependencyProvider-dummy.m
+› Compiling rn-workers-expo-example Pods/ReactCodegen » ReactCodegen-dummy.m
+› Packaging rn-workers-expo-example Pods/ReactCodegen » libReactCodegen.a
+› Packaging rn-workers-expo-example Pods/ReactAppDependencyProvider » libReactAppDependencyProvider.a
+› Compiling expo-modules-core Pods/ExpoModulesCore » TypedArray.cpp
+› Compiling expo-modules-core Pods/ExpoModulesCore » SharedObject.cpp
+› Compiling expo-modules-core Pods/ExpoModulesCore » SwiftUIVirtualViewObjC.mm
+› Compiling expo-modules-core Pods/ExpoModulesCore » ObjectDeallocator.cpp
+› Compiling expo-modules-core Pods/ExpoModulesCore » NativeModule.cpp
+› Compiling expo-modules-core Pods/ExpoModulesCore » SharedRef.cpp
+› Compiling expo-modules-core Pods/ExpoModulesCore » MainThreadInvoker.mm
+› Compiling expo-modules-core Pods/ExpoModulesCore » LazyObject.cpp
+› Compiling expo-modules-core Pods/ExpoModulesCore » JSIUtils.cpp
+› Compiling expo-modules-core Pods/ExpoModulesCore » ExpoViewShadowNode.cpp
+› Compiling expo-modules-core Pods/ExpoModulesCore » ExpoViewProps.cpp
+› Compiling expo-modules-core Pods/ExpoModulesCore » ExpoViewEventEmitter.cpp
+› Compiling expo-modules-core Pods/ExpoModulesCore » ExpoViewComponentDescriptor.cpp
+› Compiling expo-modules-core Pods/ExpoModulesCore » ExpoModulesHostObject.mm
+› Compiling expo-modules-core Pods/ExpoModulesCore » ExpoFabricViewObjC.mm
+› Compiling expo-modules-core Pods/ExpoModulesCore » ExpoBridgeModule.mm
+› Compiling expo-modules-core Pods/ExpoModulesCore » EventEmitter.cpp
+› Compiling expo-modules-core Pods/ExpoModulesCore » EXStringUtils.cpp
+› Compiling expo-modules-core Pods/ExpoModulesCore » EXSharedObjectUtils.mm
+› Compiling expo-modules-core Pods/ExpoModulesCore » EXReactNativeAdapter.mm
+› Compiling expo-modules-core Pods/ExpoModulesCore » EXReactDelegateWrapper.mm
+› Compiling expo-modules-core Pods/ExpoModulesCore » EXRawJavaScriptFunction.mm
+› Compiling expo-modules-core Pods/ExpoModulesCore » EXNativeModulesProxy.mm
+› Compiling expo-modules-core Pods/ExpoModulesCore » EXJavaScriptWeakObject.mm
+› Compiling expo-modules-core Pods/ExpoModulesCore » EXJavaScriptValue.mm
+› Compiling expo-modules-core Pods/ExpoModulesCore » EXJavaScriptTypedArray.mm
+› Compiling expo-modules-core Pods/ExpoModulesCore » EXJavaScriptSharedObjectBinding.mm
+› Compiling expo-modules-core Pods/ExpoModulesCore » EXJavaScriptRuntime.mm
+› Compiling expo-modules-core Pods/ExpoModulesCore » EXJavaScriptObject.mm
+› Compiling expo-modules-core Pods/ExpoModulesCore » EXJSIUtils.mm
+› Compiling expo-modules-core Pods/ExpoModulesCore » EXJSIInstaller.mm
+› Compiling expo-modules-core Pods/ExpoModulesCore » EXJSIConversions.mm
+› Compiling expo-modules-core Pods/ExpoModulesCore » EXLogManager.m
+› Compiling expo-modules-core Pods/ExpoModulesCore » EXModuleRegistryAdapter.m
+› Compiling expo-modules-core Pods/ExpoModulesCore » EXExportedModule.m
+› Compiling expo-modules-core Pods/ExpoModulesCore » EXAppDefines.m
+› Compiling expo-modules-core Pods/ExpoModulesCore » RCTComponentData+Privates.m
+› Compiling expo-modules-core Pods/ExpoModulesCore » EXUtilities.m
+› Compiling expo-modules-core Pods/ExpoModulesCore » EXSingletonModule.m
+› Compiling expo-modules-core Pods/ExpoModulesCore » EXReactNativeUserNotificationCenterProxy.m
+› Compiling expo-modules-core Pods/ExpoModulesCore » EXReactLogHandler.m
+› Compiling expo-modules-core Pods/ExpoModulesCore » EXPermissionsService.m
+› Compiling expo-modules-core Pods/ExpoModulesCore » EXPermissionsMethodsDelegate.m
+› Compiling expo-modules-core Pods/ExpoModulesCore » EXModuleRegistryHolderReactModule.m
+› Compiling expo-modules-core Pods/ExpoModulesCore » CoreModuleHelper.m
+› Compiling expo-modules-core Pods/ExpoModulesCore » EXReactNativeEventEmitter.m
+› Compiling expo-modules-core Pods/ExpoModulesCore » EXModuleRegistryProvider.m
+› Compiling expo-modules-core Pods/ExpoModulesCore » EXModuleRegistry.m
+› Compiling expo-modules-core Pods/ExpoModulesCore » ExpoModulesCore-dummy.m
+› Packaging expo-modules-core Pods/ExpoModulesCore » libExpoModulesCore.a
+› Executing expo-modules-core Pods/ExpoModulesCore » Copy generated compatibility header
+› Executing expo-constants Pods/EXConstants » [CP-User] Generate app.config for prebuilt Constants.manifest
+› Compiling @ammarahmed/react-native-workers Pods/ReactNativeWorkers » WorkerTurboModulesAndroid.cpp
+› Compiling @ammarahmed/react-native-workers Pods/ReactNativeWorkers » WorkerTurboModules.cpp
+› Compiling @ammarahmed/react-native-workers Pods/ReactNativeWorkers » WorkerTurboModules.mm
+› Compiling @ammarahmed/react-native-workers Pods/ReactNativeWorkers » WorkerThreads.cpp
+› Compiling @ammarahmed/react-native-workers Pods/ReactNativeWorkers » WorkerThreadScope.cpp
+› Compiling @ammarahmed/react-native-workers Pods/ReactNativeWorkers » WorkerJsLock.cpp
+› Compiling @ammarahmed/react-native-workers Pods/ReactNativeWorkers » WorkerInspector.cpp
+› Compiling @ammarahmed/react-native-workers Pods/ReactNativeWorkers » WorkerGlobalScope.cpp
+› Compiling @ammarahmed/react-native-workers Pods/ReactNativeWorkers » WorkerExpoModulesAndroid.cpp
+› Compiling @ammarahmed/react-native-workers Pods/ReactNativeWorkers » WorkerExpoModules.mm
+› Compiling @ammarahmed/react-native-workers Pods/ReactNativeWorkers » WorkerExpoModules.cpp
+› Compiling @ammarahmed/react-native-workers Pods/ReactNativeWorkers » WorkerBlobCollector.cpp
+› Compiling @ammarahmed/react-native-workers Pods/ReactNativeWorkers » WorkerAssetReaderIOS.mm
+› Compiling @ammarahmed/react-native-workers Pods/ReactNativeWorkers » WorkerAssetReaderAndroid.cpp
+› Compiling @ammarahmed/react-native-workers Pods/ReactNativeWorkers » WorkerAssetReader.cpp
+› Compiling @ammarahmed/react-native-workers Pods/ReactNativeWorkers » Worker.cpp
+› Compiling @ammarahmed/react-native-workers Pods/ReactNativeWorkers » UiWorkerHost.cpp
+› Compiling @ammarahmed/react-native-workers Pods/ReactNativeWorkers » ThreadTarget.cpp
+› Compiling @ammarahmed/react-native-workers Pods/ReactNativeWorkers » SharedValue.cpp
+› Compiling @ammarahmed/react-native-workers Pods/ReactNativeWorkers » SharedStore.cpp
+› Compiling @ammarahmed/react-native-workers Pods/ReactNativeWorkers » SharedBuffer.cpp
+› Compiling @ammarahmed/react-native-workers Pods/ReactNativeWorkers » ReactNativeWorkersImpl.cpp
+› Compiling @ammarahmed/react-native-workers Pods/ReactNativeWorkers » OnLoad.mm
+› Compiling @ammarahmed/react-native-workers Pods/ReactNativeWorkers » NativeWorkers.cpp
+› Compiling @ammarahmed/react-native-workers Pods/ReactNativeWorkers » MessageCodec.cpp
+› Compiling @ammarahmed/react-native-workers Pods/ReactNativeWorkers » MainThreadSchedulerAndroid.cpp
+› Compiling @ammarahmed/react-native-workers Pods/ReactNativeWorkers » MainThreadScheduler.cpp
+› Compiling @ammarahmed/react-native-workers Pods/ReactNativeWorkers » MainThreadScheduler.mm
+› Compiling @ammarahmed/react-native-workers Pods/ReactNativeWorkers » HostThreadWakerAndroid.cpp
+› Compiling @ammarahmed/react-native-workers Pods/ReactNativeWorkers » HostThreadWaker.cpp
+› Compiling @ammarahmed/react-native-workers Pods/ReactNativeWorkers » HermesWorkerHost.cpp
+› Compiling expo Pods/Expo » EXReactRootViewFactory.mm
+› Compiling expo Pods/Expo » EXAppDelegateWrapper.mm
+› Compiling rn-workers-expo-example Pods/RNWProbe » RNWProbe-dummy.m
+› Packaging rn-workers-expo-example Pods/RNWProbe » libRNWProbe.a
+› Compiling expo-keep-awake Pods/ExpoKeepAwake » ExpoKeepAwake-dummy.m
+› Compiling expo-font Pods/ExpoFont » ExpoFont-dummy.m
+› Packaging expo-keep-awake Pods/ExpoKeepAwake » libExpoKeepAwake.a
+› Compiling expo-file-system Pods/ExpoFileSystem » EXSessionUploadTaskDelegate.m
+› Packaging expo-font Pods/ExpoFont » libExpoFont.a
+› Compiling expo-file-system Pods/ExpoFileSystem » ExpoFileSystem-dummy.m
+› Compiling expo-file-system Pods/ExpoFileSystem » EXSessionTaskDispatcher.m
+› Compiling expo-file-system Pods/ExpoFileSystem » EXTaskHandlersManager.m
+› Compiling expo-file-system Pods/ExpoFileSystem » EXSessionTaskDelegate.m
+› Compiling expo-file-system Pods/ExpoFileSystem » NSData+EXFileSystem.m
+› Compiling expo-file-system Pods/ExpoFileSystem » EXSessionResumableDownloadTaskDelegate.m
+› Compiling expo-file-system Pods/ExpoFileSystem » EXSessionHandler.m
+› Compiling expo-file-system Pods/ExpoFileSystem » EXSessionDownloadTaskDelegate.m
+› Compiling expo-file-system Pods/ExpoFileSystem » EXSessionCancelableUploadTaskDelegate.m
+› Compiling expo-crypto Pods/ExpoCrypto » ExpoCrypto-dummy.m
+› Compiling expo-device Pods/ExpoDevice » ExpoDevice-dummy.m
+› Compiling expo-asset Pods/ExpoAsset » ExpoAsset-dummy.m
+› Packaging expo-crypto Pods/ExpoCrypto » libExpoCrypto.a
+› Packaging expo-device Pods/ExpoDevice » libExpoDevice.a
+› Packaging expo-asset Pods/ExpoAsset » libExpoAsset.a
+› Compiling expo Pods/Expo » Expo-dummy.m
+› Executing rn-workers-expo-example Pods/RNWProbe » Copy generated compatibility header
+› Executing expo-keep-awake Pods/ExpoKeepAwake » Copy generated compatibility header
+› Executing expo-font Pods/ExpoFont » Copy generated compatibility header
+› Executing expo-device Pods/ExpoDevice » Copy generated compatibility header
+› Executing expo-crypto Pods/ExpoCrypto » Copy generated compatibility header
+› Executing expo-asset Pods/ExpoAsset » Copy generated compatibility header
+› Compiling expo-application Pods/EXApplication » EXProvisioningProfile.m
+› Compiling expo-file-system Pods/ExpoFileSystem » EXFileSystemLocalFileHandler.m
+› Compiling expo-file-system Pods/ExpoFileSystem » EXFileSystemAssetLibraryHandler.m
+› Compiling expo-application Pods/EXApplication » EXApplication-dummy.m
+› Packaging expo-application Pods/EXApplication » libEXApplication.a
+› Executing expo-application Pods/EXApplication » Copy generated compatibility header
+› Packaging expo-file-system Pods/ExpoFileSystem » libExpoFileSystem.a
+› Executing expo-file-system Pods/ExpoFileSystem » Copy generated compatibility header
+› Compiling expo-constants Pods/EXConstants » EXConstantsInstallationIdProvider.m
+› Compiling expo-constants Pods/EXConstants » EXConstantsService.m
+› Compiling expo-constants Pods/EXConstants » EXConstants-dummy.m
+› Packaging expo-constants Pods/EXConstants » libEXConstants.a
+› Executing expo-constants Pods/EXConstants » Copy generated compatibility header
+› Compiling @ammarahmed/react-native-workers Pods/ReactNativeWorkers » ReactNativeWorkers-dummy.m
+› Packaging @ammarahmed/react-native-workers Pods/ReactNativeWorkers » libReactNativeWorkers.a
+› Executing @ammarahmed/react-native-workers Pods/ReactNativeWorkers » Copy generated compatibility header
+› Compiling expo Pods/Expo » EXLegacyAppDelegateWrapper.m
+› Compiling expo Pods/Expo » EXAppDelegatesLoader.m
+› Compiling expo Pods/Expo » EXAppDefinesLoader.m
+› Packaging expo Pods/Expo » libExpo.a
+› Executing expo Pods/Expo » Copy generated compatibility header
+› Compiling Pods/Pods-RNWorkersExpo » Pods-RNWorkersExpo-dummy.m
+› Packaging Pods/Pods-RNWorkersExpo » libPods-RNWorkersExpo.a
+› Executing RNWorkersExpo » [CP] Check Pods Manifest.lock
+› Executing RNWorkersExpo » [Expo] Configure project
+› Copying   ./PrivacyInfo.xcprivacy ➜ ios/RNWorkersExpo/PrivacyInfo.xcprivacy
+› Linking   RNWorkersExpo » __preview.dylib
+› Compiling RNWorkersExpo » SplashScreen.storyboard
+› Copying   ios/RNWorkersExpo/Supporting/Expo.plist ➜ ./Expo.plist
+› Compiling RNWorkersExpo » RNWorkersExpo_vers.c
+› Linking   RNWorkersExpo » RNWorkersExpo.debug.dylib
+› Linking   RNWorkersExpo » RNWorkersExpo
+› Generating debug RNWorkersExpo » RNWorkersExpo.app.dSYM
+› Preparing RNWorkersExpo » Info.plist
+› Executing RNWorkersExpo » Bundle React Native code and images
+› Generating debug RNWorkersExpo » RNWorkersExpo.app.dSYM
+› Executing RNWorkersExpo » [CP] Copy Pods Resources
+› Executing RNWorkersExpo » Bundle React Native worker code
+› Executing RNWorkersExpo » [CP] Embed Pods Frameworks
+› Signing   RNWorkersExpo » RNWorkersExpo.debug.dylib
+› Signing   RNWorkersExpo » __preview.dylib
+› Signing   RNWorkersExpo » RNWorkersExpo.app
+› Creating  RNWorkersExpo » RNWorkersExpo.app
+⚠️  Script has ambiguous dependencies causing it to run on every build.
+   To fix, go to: Xcode » RNWorkersExpo/RNWorkersExpo » Build Phases » 'Bundle React Native worker code'
+   Either: Uncheck "Based on dependency analysis", or select output files to trigger the script
+
+› Build Succeeded
+
+› 0 error(s), and 1 warning(s)
+
+Starting Metro Bundler
+Waiting on http://localhost:8081
+› Installing /Users/ammarahmed/Library/Developer/Xcode/DerivedData/RNWorkersExpo-fltcjdqehbrjnfftuspngwrqimbs/Build/Products/Debug-iphonesimulator/RNWorkersExpo.app
+› Installing on iPhone 17
+Recrawled this watch 433 times, most recently because:
+MustScanSubDirs UserDroppedTo resolve, please review the information on
+https://facebook.github.io/watchman/docs/troubleshooting.html#recrawl
+To clear this warning, run:
+`watchman watch-del '/Users/ammarahmed/Work/Projects/react-native/react-native-workers' ; watchman watch-project '/Users/ammarahmed/Work/Projects/react-native/react-native-workers'`
+
+› Opening on iPhone 17 (com.ammarahmed.rnworkers.expoexample)
+› Opening com.ammarahmed.rnworkers.expoexample://expo-development-client/?url=http%3A%2F%2F192.168.1.2%3A8081 on iPhone 17
+
+› Logs for your project will appear below.
+iOS Bundled 2657ms index.js (692 modules)
+[RNWorkersExpo.debug.dylib] [RNWorkerExpo] registerAppContext: present
+(companion Expo module OnCreate ran)
+iOS Bundled 164ms src/workers/probe.ts (2 modules)
+[RNWorkersExpo.debug.dylib] [RNWorkerExpo] installExpoIntoWorker:
+appContext=present invoker=1
+[RNWorkersExpo.debug.dylib] [RNWorkerExpo] installed global.expo.modules
+(native-forwarding) OK; modules=14
+ LOG  [Worker:probe] [probe] worker started
+ LOG  [Worker:probe] [probe] typeof globalThis.expo = object
+ LOG  [Worker:probe] [probe] expo.modules present = true
+ LOG  [Worker:probe] [probe] expo result = {"installed":true,"how":"global.expo.modules","keys":["ExpoKeepAwake","ExpoCrypto","ExpoFontLoader","FileSystem","ExpoApplication","ExpoAsset","RNWProbe","ExponentConstants","ExpoFetchModule","ExpoModulesCoreJSLogger","ExpoDevice","ExponentFileSystem","ExpoFontUtils","RNWorkersExpo"],"constant":"ExpoDevice.osName=iOS isDevice=false","asyncCall":"ExpoDevice.getDeviceTypeAsync()=1","syncCall":"ExpoCrypto.randomUUID()=7a2f1698-19c5-4b0b-ae57-9dc25fcdc91a (sync string ✓)","property":"answer=42 nowMs live (1785126185835.1082 → 1785126185854.409) ✓","event":"onTick received in worker: {\"label\":\"tick\",\"count\":7} (emit=emitted:7) ✓"}
+ LOG  [expo-example] probe result: {
+  "workerAlive": true,
+  "rnTurboModule": {
+    "resolved": true,
+    "reachable": true
+  },
+  "expoModules": {
+    "installed": true,
+    "how": "global.expo.modules",
+    "keys": [
+      "ExpoKeepAwake",
+      "ExpoCrypto",
+      "ExpoFontLoader",
+      "FileSystem",
+      "ExpoApplication",
+      "ExpoAsset",
+      "RNWProbe",
+      "ExponentConstants",
+      "ExpoFetchModule",
+      "ExpoModulesCoreJSLogger",
+      "ExpoDevice",
+      "ExponentFileSystem",
+      "ExpoFontUtils",
+      "RNWorkersExpo"
+    ],
+    "constant": "ExpoDevice.osName=iOS isDevice=false",
+    "asyncCall": "ExpoDevice.getDeviceTypeAsync()=1",
+    "syncCall": "ExpoCrypto.randomUUID()=7a2f1698-19c5-4b0b-ae57-9dc25fcdc91a (sync string ✓)",
+    "property": "answer=42 nowMs live (1785126185835.1082 → 1785126185854.409) ✓",
+    "event": "onTick received in worker: {\"label\":\"tick\",\"count\":7} (emit=emitted:7) ✓"
+  }
+}

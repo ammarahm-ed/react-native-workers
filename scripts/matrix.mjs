@@ -37,7 +37,6 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const MATRIX_DIR = path.join(ROOT, '.matrix');
 const TARBALL = path.join(MATRIX_DIR, 'react-native-workers.tgz');
-const RESULTS = path.join(MATRIX_DIR, 'results.json');
 
 const DEFAULT_RN = ['0.81', '0.82', '0.83', '0.84', '0.85', '0.86', 'latest', 'next'];
 const DEFAULT_EXPO = ['54', '55', '56', '57', 'latest'];
@@ -56,6 +55,16 @@ const force = !!args.force;
 const bail = !!args.bail;
 const rnList = args.rn ? String(args.rn).split(',') : DEFAULT_RN;
 const expoList = args.expo ? String(args.expo).split(',') : DEFAULT_EXPO;
+
+// Scaffolds, logs and results are namespaced BY PLATFORM so an android and an ios
+// sweep can run at the same time. They previously shared `.matrix/<dir>`, so a
+// parallel run had each process re-scaffolding (and deleting) the directory the
+// other was building in — surfacing as "scaffold failed" / ENOTEMPTY rather than
+// anything to do with the library. The packed tarball stays shared: it is written
+// once by --pack and only read afterwards.
+const PLATFORM_DIR = path.join(MATRIX_DIR, platform);
+const RESULTS = path.join(MATRIX_DIR, `results-${platform}.json`);
+fs.mkdirSync(PLATFORM_DIR, { recursive: true });
 
 // ---- helpers ----
 const log = (...m) => console.log('[matrix]', ...m);
@@ -122,10 +131,10 @@ function packLibrary() {
 // ---- scaffolding ----
 // Log to a SIBLING file (`.matrix/<dir>.log`), never inside the app dir — the
 // scaffolders (cli init / create-expo-app) refuse a non-empty target dir.
-const logPathFor = (dir) => path.join(MATRIX_DIR, `${dir}.log`);
+const logPathFor = (dir) => path.join(PLATFORM_DIR, `${dir}.log`);
 
 function scaffoldRn(fullVersion, dir) {
-  const abs = path.join(MATRIX_DIR, dir);
+  const abs = path.join(PLATFORM_DIR, dir);
   const logPath = logPathFor(dir);
   fs.rmSync(abs, { recursive: true, force: true }); // init needs a fresh directory
   fs.writeFileSync(logPath, `# ${dir} — react-native ${fullVersion}\n`);
@@ -133,14 +142,14 @@ function scaffoldRn(fullVersion, dir) {
   const ok = run(
     `npx --yes @react-native-community/cli@latest init MatrixApp ` +
       `--directory "${abs}" --version "${fullVersion}" --pm npm --skip-git-init --install-pods false`,
-    MATRIX_DIR,
+    PLATFORM_DIR,
     logPath
   );
   return { ok, logPath };
 }
 
 function scaffoldExpo(sdk, dir) {
-  const abs = path.join(MATRIX_DIR, dir);
+  const abs = path.join(PLATFORM_DIR, dir);
   const logPath = logPathFor(dir);
   // create-expo-app wants a non-existing (or empty) target dir.
   fs.rmSync(abs, { recursive: true, force: true });
@@ -152,7 +161,7 @@ function scaffoldExpo(sdk, dir) {
   const ok =
     run(
       `npx --yes create-expo-app@latest "${abs}" --no-install --yes --template ${template}`,
-      MATRIX_DIR,
+      PLATFORM_DIR,
       logPath
     ) &&
     run(`npm install --legacy-peer-deps`, abs, logPath) &&
@@ -162,14 +171,14 @@ function scaffoldExpo(sdk, dir) {
 }
 
 function installTarball(dir, logPath) {
-  const abs = path.join(MATRIX_DIR, dir);
+  const abs = path.join(PLATFORM_DIR, dir);
   // --legacy-peer-deps so a prerelease RN (the `next`/nightly channel) doesn't fail
   // the install on a strict peer-range mismatch — we still want the compile signal.
   return run(`npm install "${TARBALL}" --legacy-peer-deps`, abs, logPath);
 }
 
 function build(dir, logPath) {
-  const abs = path.join(MATRIX_DIR, dir);
+  const abs = path.join(PLATFORM_DIR, dir);
   if (platform === 'android') {
     return run(
       `cd android && ./gradlew :app:assembleDebug -PreactNativeArchitectures=arm64-v8a --console=plain`,
@@ -191,9 +200,15 @@ function build(dir, logPath) {
     return false;
   }
   const scheme = workspace.replace('.xcworkspace', '');
+  // -derivedDataPath keeps Xcode's build output INSIDE the scaffold instead of the
+  // shared ~/Library/Developer/Xcode/DerivedData. Two reasons: cleanupTarget() can
+  // then reclaim everything by deleting one directory, and a matrix run never
+  // evicts or grows the developer's own DerivedData. A full sweep otherwise adds
+  // tens of GB and has filled the disk mid-run.
   return run(
     `cd ios && xcodebuild -workspace "${workspace}" -scheme "${scheme}" ` +
       `-configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' ` +
+      `-derivedDataPath build/DerivedData ` +
       `build CODE_SIGNING_ALLOWED=NO`,
     abs,
     logPath
@@ -215,13 +230,28 @@ if (doPack || !fs.existsSync(TARBALL)) packLibrary();
 else log('reusing existing tarball (pass --pack to rebuild):', path.relative(ROOT, TARBALL));
 
 const results = loadResults();
+// Reclaim a finished target's disk before moving to the next one.
+//
+// Each scaffold is a full app (node_modules + Pods/Gradle output + DerivedData),
+// several GB each; a 13-target sweep otherwise needs 40 GB+ and has run the disk
+// to 0, which fails builds in ways that look like real compile errors. The log
+// and results.json are the durable artefacts, and both live outside `dir`.
+function cleanupTarget(dir) {
+  const abs = path.join(PLATFORM_DIR, dir);
+  try {
+    fs.rmSync(abs, { recursive: true, force: true });
+  } catch {
+    // Best-effort: never fail a run over cleanup.
+  }
+}
+
 for (const t of targets) {
   const key = `${platform}:${t.dir}`;
   if (!force && results[key]?.status === 'pass') {
     log(`SKIP ${key} (already passing; --force to rebuild)`);
     continue;
   }
-  const abs = path.join(MATRIX_DIR, t.dir);
+  const abs = path.join(PLATFORM_DIR, t.dir);
   const logPath = logPathFor(t.dir);
   // "Scaffolded" requires BOTH package.json AND the native dir — a target that
   // failed at scaffold (e.g. prebuild never produced `android/`) must be redone,
@@ -253,6 +283,7 @@ for (const t of targets) {
 
     results[key] = { status: 'pass', spec: t.spec, at: new Date().toISOString() };
     log(`PASS ${key}`);
+    cleanupTarget(t.dir);
   } catch (e) {
     results[key] = { status: 'fail', spec: t.spec, error: String(e.message || e) };
     log(`FAIL ${key}: ${e.message || e}`);
@@ -265,6 +296,9 @@ for (const t of targets) {
       saveResults(results);
       die(`bailing at first failure (${key})`);
     }
+    // Reclaim the failed target too: its log already holds the diagnosis, and
+    // leaving several GB behind is what fills the disk during a long sweep.
+    cleanupTarget(t.dir);
   }
   saveResults(results);
 }

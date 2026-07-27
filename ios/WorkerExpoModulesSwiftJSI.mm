@@ -28,9 +28,11 @@
 
 #import <chrono>
 #import <condition_variable>
+#import <map>
 #import <memory>
 #import <mutex>
 #import <string>
+#import <unordered_map>
 #import <utility>
 #import <vector>
 
@@ -111,76 +113,190 @@ bool withModuleObjectSync(const std::string &moduleName,
   return cv->wait_for(lock, kMainRuntimeTimeout, [done] { return *done; });
 }
 
+struct EventRegistry;
 jsi::Value makeModuleFunction(jsi::Runtime &workerRt,
                               const std::string &moduleName,
                               const std::string &fnName,
-                              std::shared_ptr<CallInvoker> workerInvoker);
+                              std::shared_ptr<CallInvoker> workerInvoker,
+                              std::shared_ptr<EventRegistry> registry);
+
+/// Per-worker event subscriptions.
+///
+/// Two rules drive this design:
+///
+///  * Exactly ONE bridge is registered with Expo per (module, event), no matter
+///    how many worker listeners there are. Registering one per addListener call
+///    means a subscribe/unsubscribe cycle (the standard useEffect pattern) piles
+///    up duplicates on the app-lifetime AppContext and the callback fires N times.
+///
+///  * Worker `jsi::Function`s are only ever released ON the worker thread, while
+///    its runtime is alive. The Expo module outlives the worker, so a listener
+///    left registered after terminate() would eventually release a jsi::Function
+///    belonging to a destroyed runtime — a use-after-free. `dispose()` below is
+///    what prevents that, and it runs from the installer's teardown.
+struct EventRegistry {
+  std::mutex mutex;
+  uint64_t nextId = 1;
+  /// "module\x1fevent" -> the Subscription Expo returned, owned by the MAIN
+  /// runtime (so it must be released there).
+  std::unordered_map<std::string, std::shared_ptr<jsi::Object>> mainSubscriptions;
+  /// "module\x1fevent" -> { subscription id -> worker callback }
+  std::unordered_map<std::string, std::map<uint64_t, std::shared_ptr<jsi::Function>>>
+      listeners;
+
+  /// In-flight async calls: id -> the worker Promise's resolve/reject.
+  ///
+  /// These MUST live here and not be captured by the main-runtime `.then`
+  /// handlers. A main-runtime host function that captures a worker
+  /// `jsi::Function` gets finalized by the MAIN runtime's GC, which then
+  /// destroys a worker jsi value on the main JS thread — a segfault in
+  /// ~Pointer(). Main-runtime lambdas capture only this id.
+  std::unordered_map<uint64_t,
+                     std::pair<std::shared_ptr<jsi::Function>, std::shared_ptr<jsi::Function>>>
+      pendingCalls;
+
+  static std::string key(const std::string &module, const std::string &event) {
+    return module + "\x1f" + event;
+  }
+
+  /// Called on the worker thread with the worker runtime still alive.
+  void dispose() {
+    decltype(mainSubscriptions) subs;
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      // Releases every worker callback here, on the worker thread.
+      listeners.clear();
+      pendingCalls.clear();
+      subs.swap(mainSubscriptions);
+    }
+    if (subs.empty()) {
+      return;
+    }
+    // Detach from Expo and release the main-runtime objects on the main runtime.
+    __block auto pending = std::move(subs);
+    runOnMainRuntimeSync(^(jsi::Runtime &mainRt) {
+      for (auto &entry : pending) {
+        try {
+          if (entry.second && entry.second->hasProperty(mainRt, "remove")) {
+            entry.second->getPropertyAsFunction(mainRt, "remove")
+                .callWithThis(mainRt, *entry.second);
+          }
+        } catch (...) {
+        }
+      }
+      pending.clear();
+    });
+  }
+};
 
 /// `module.addListener(event, callback)`.
 ///
 /// The callback belongs to the WORKER runtime and must never cross to the main
-/// one. Instead a small host function is created on the main runtime and handed
-/// to Expo; when the module emits, it structured-clones the payload and hops back
-/// through the worker's CallInvoker to call the original callback in place.
+/// one. A single bridge function per (module, event) lives on the main runtime;
+/// when Expo emits, it structured-clones the payload and hops back through the
+/// worker's CallInvoker to fan out to the current worker listeners.
 jsi::Value makeAddListener(jsi::Runtime &workerRt,
                            const std::string &moduleName,
-                           std::shared_ptr<CallInvoker> workerInvoker) {
+                           std::shared_ptr<CallInvoker> workerInvoker,
+                           std::shared_ptr<EventRegistry> registry) {
   return jsi::Function::createFromHostFunction(
       workerRt, jsi::PropNameID::forAscii(workerRt, "addListener"), 2,
-      [moduleName, workerInvoker](jsi::Runtime &rt, const jsi::Value &,
-                                  const jsi::Value *args, size_t count) -> jsi::Value {
+      [moduleName, workerInvoker, registry](jsi::Runtime &rt, const jsi::Value &,
+                                            const jsi::Value *args,
+                                            size_t count) -> jsi::Value {
         if (count < 2 || !args[1].isObject() || !args[1].getObject(rt).isFunction(rt)) {
           throw jsi::JSError(rt, "addListener(eventName, callback) requires a function");
         }
         const std::string event = args[0].toString(rt).utf8(rt);
+        const std::string key = EventRegistry::key(moduleName, event);
         auto callback = std::make_shared<jsi::Function>(args[1].getObject(rt).getFunction(rt));
 
-        withModuleObjectSync(moduleName, ^(jsi::Runtime &mainRt, jsi::Object &module) {
-          if (!module.hasProperty(mainRt, "addListener")) {
-            return; // module emits no events
-          }
-          jsi::Function bridge = jsi::Function::createFromHostFunction(
-              mainRt, jsi::PropNameID::forAscii(mainRt, "__rnwWorkerEventBridge"), 1,
-              [workerInvoker, callback](jsi::Runtime &emitRt, const jsi::Value &,
-                                        const jsi::Value *payload, size_t n) -> jsi::Value {
-                std::shared_ptr<Message> encoded;
-                try {
-                  if (n > 0) {
-                    encoded = std::make_shared<Message>(
-                        facebook::react::workers::encode(emitRt, payload[0]));
-                  } else {
-                    encoded = std::make_shared<Message>(
-                        facebook::react::workers::encode(emitRt, jsi::Value::undefined()));
-                  }
-                } catch (...) {
-                  return jsi::Value::undefined(); // payload not cloneable; drop
-                }
-                workerInvoker->invokeAsync([encoded, callback](jsi::Runtime &workerRt) {
-                  try {
-                    callback->call(workerRt,
-                                   facebook::react::workers::decode(workerRt, *encoded));
-                  } catch (...) {
-                  }
-                });
-                return jsi::Value::undefined();
-              });
-          try {
-            module.getPropertyAsFunction(mainRt, "addListener")
-                .callWithThis(mainRt, module,
-                              jsi::String::createFromUtf8(mainRt, event),
-                              std::move(bridge));
-          } catch (...) {
-          }
-        });
+        uint64_t id;
+        bool needsBridge;
+        {
+          std::lock_guard<std::mutex> lock(registry->mutex);
+          id = registry->nextId++;
+          registry->listeners[key][id] = callback;
+          needsBridge = registry->mainSubscriptions.find(key) ==
+                        registry->mainSubscriptions.end();
+        }
 
-        // Expo hands back a Subscription; mirror that shape so callers can hold
-        // and drop it. Removal is not wired through yet — see the docs note.
+        if (needsBridge) {
+          std::weak_ptr<EventRegistry> weakRegistry = registry;
+          withModuleObjectSync(moduleName, ^(jsi::Runtime &mainRt, jsi::Object &module) {
+            if (!module.hasProperty(mainRt, "addListener")) {
+              return; // module emits no events
+            }
+            jsi::Function bridge = jsi::Function::createFromHostFunction(
+                mainRt, jsi::PropNameID::forAscii(mainRt, "__rnwWorkerEventBridge"), 1,
+                [workerInvoker, weakRegistry, key](jsi::Runtime &emitRt, const jsi::Value &,
+                                                   const jsi::Value *payload,
+                                                   size_t n) -> jsi::Value {
+                  std::shared_ptr<Message> encoded;
+                  try {
+                    if (n > 0) {
+                      encoded = std::make_shared<Message>(
+                          facebook::react::workers::encode(emitRt, payload[0]));
+                    } else {
+                      encoded = std::make_shared<Message>(
+                          facebook::react::workers::encode(emitRt, jsi::Value::undefined()));
+                    }
+                  } catch (...) {
+                    return jsi::Value::undefined(); // payload not cloneable; drop
+                  }
+                  workerInvoker->invokeAsync(
+                      [encoded, weakRegistry, key](jsi::Runtime &workerRt) {
+                        auto reg = weakRegistry.lock();
+                        if (!reg) return; // worker torn down
+                        std::vector<std::shared_ptr<jsi::Function>> targets;
+                        {
+                          std::lock_guard<std::mutex> lock(reg->mutex);
+                          auto it = reg->listeners.find(key);
+                          if (it == reg->listeners.end()) return;
+                          for (auto &entry : it->second) targets.push_back(entry.second);
+                        }
+                        // Called outside the lock: a listener may add or remove
+                        // subscriptions re-entrantly.
+                        for (auto &target : targets) {
+                          try {
+                            target->call(workerRt,
+                                         facebook::react::workers::decode(workerRt, *encoded));
+                          } catch (...) {
+                          }
+                        }
+                      });
+                  return jsi::Value::undefined();
+                });
+            try {
+              jsi::Value sub = module.getPropertyAsFunction(mainRt, "addListener")
+                                   .callWithThis(mainRt, module,
+                                                 jsi::String::createFromUtf8(mainRt, event),
+                                                 std::move(bridge));
+              if (auto reg = weakRegistry.lock(); reg && sub.isObject()) {
+                std::lock_guard<std::mutex> lock(reg->mutex);
+                reg->mainSubscriptions[key] =
+                    std::make_shared<jsi::Object>(sub.getObject(mainRt));
+              }
+            } catch (...) {
+            }
+          });
+        }
+
+        // Expo's Subscription shape. remove() only touches the worker-side
+        // registry: no main-runtime round trip, and the callback is released
+        // here on the worker thread where that is safe.
         jsi::Object subscription(rt);
         subscription.setProperty(
             rt, "remove",
             jsi::Function::createFromHostFunction(
                 rt, jsi::PropNameID::forAscii(rt, "remove"), 0,
-                [](jsi::Runtime &, const jsi::Value &, const jsi::Value *, size_t) {
+                [registry, key, id](jsi::Runtime &, const jsi::Value &, const jsi::Value *,
+                                    size_t) -> jsi::Value {
+                  std::lock_guard<std::mutex> lock(registry->mutex);
+                  auto it = registry->listeners.find(key);
+                  if (it != registry->listeners.end()) {
+                    it->second.erase(id);
+                  }
                   return jsi::Value::undefined();
                 }));
         return jsi::Value(rt, subscription);
@@ -191,8 +307,11 @@ jsi::Value makeAddListener(jsi::Runtime &workerRt,
 /// are forwarded to the module's JS object on the main runtime.
 class ExpoModuleProxy : public jsi::HostObject {
  public:
-  ExpoModuleProxy(std::string name, std::shared_ptr<CallInvoker> invoker)
-      : name_(std::move(name)), invoker_(std::move(invoker)) {}
+  ExpoModuleProxy(std::string name, std::shared_ptr<CallInvoker> invoker,
+                  std::shared_ptr<EventRegistry> registry)
+      : name_(std::move(name)),
+        invoker_(std::move(invoker)),
+        registry_(std::move(registry)) {}
 
   jsi::Value get(jsi::Runtime &workerRt, const jsi::PropNameID &propName) override {
     const std::string prop = propName.utf8(workerRt);
@@ -200,7 +319,7 @@ class ExpoModuleProxy : public jsi::HostObject {
       // NOT routed through makeModuleFunction: that structured-clones its
       // arguments, and a listener callback cannot be cloned. The callback has to
       // stay in the worker runtime and be invoked there.
-      return makeAddListener(workerRt, name_, invoker_);
+      return makeAddListener(workerRt, name_, invoker_, registry_);
     }
 
     __block bool isFunction = false;
@@ -227,7 +346,7 @@ class ExpoModuleProxy : public jsi::HostObject {
     });
 
     if (isFunction) {
-      return makeModuleFunction(workerRt, moduleName, prop, invoker_);
+      return makeModuleFunction(workerRt, moduleName, prop, invoker_, registry_);
     }
     if (hasValue) {
       try {
@@ -258,6 +377,7 @@ class ExpoModuleProxy : public jsi::HostObject {
  private:
   std::string name_;
   std::shared_ptr<CallInvoker> invoker_;
+  std::shared_ptr<EventRegistry> registry_;
 };
 
 /// Calls `module.fn(...)` on the main runtime.
@@ -269,12 +389,13 @@ class ExpoModuleProxy : public jsi::HostObject {
 jsi::Value makeModuleFunction(jsi::Runtime &workerRt,
                               const std::string &moduleName,
                               const std::string &fnName,
-                              std::shared_ptr<CallInvoker> workerInvoker) {
+                              std::shared_ptr<CallInvoker> workerInvoker,
+                              std::shared_ptr<EventRegistry> registry) {
   return jsi::Function::createFromHostFunction(
       workerRt, jsi::PropNameID::forUtf8(workerRt, fnName), 0,
-      [moduleName, fnName, workerInvoker](jsi::Runtime &rt, const jsi::Value &,
-                                          const jsi::Value *args,
-                                          size_t count) -> jsi::Value {
+      [moduleName, fnName, workerInvoker, registry](jsi::Runtime &rt, const jsi::Value &,
+                                                    const jsi::Value *args,
+                                                    size_t count) -> jsi::Value {
         // Encode arguments once, in the worker runtime.
         auto encodedArgs = std::make_shared<std::vector<Message>>();
         for (size_t i = 0; i < count; i++) {
@@ -337,14 +458,21 @@ jsi::Value makeModuleFunction(jsi::Runtime &workerRt,
         return promiseCtor.callAsConstructor(
             rt, jsi::Function::createFromHostFunction(
                     rt, jsi::PropNameID::forAscii(rt, "executor"), 2,
-                    [moduleName, fnName, encodedArgs, workerInvoker](
+                    [moduleName, fnName, encodedArgs, workerInvoker, registry](
                         jsi::Runtime &rt, const jsi::Value &, const jsi::Value *a,
                         size_t n) -> jsi::Value {
                       if (n < 2) return jsi::Value::undefined();
-                      auto resolve = std::make_shared<jsi::Function>(
-                          a[0].getObject(rt).getFunction(rt));
-                      auto reject = std::make_shared<jsi::Function>(
-                          a[1].getObject(rt).getFunction(rt));
+                      // Park the worker's resolve/reject in the registry; only
+                      // `callId` may cross to the main runtime.
+                      uint64_t callId;
+                      {
+                        std::lock_guard<std::mutex> lock(registry->mutex);
+                        callId = registry->nextId++;
+                        registry->pendingCalls[callId] = {
+                            std::make_shared<jsi::Function>(a[0].getObject(rt).getFunction(rt)),
+                            std::make_shared<jsi::Function>(a[1].getObject(rt).getFunction(rt))};
+                      }
+                      std::weak_ptr<EventRegistry> weakRegistry = registry;
 
                       [RNWorkersExpoJSI
                           withModuleObject:[NSString stringWithUTF8String:moduleName.c_str()]
@@ -366,11 +494,25 @@ jsi::Value makeModuleFunction(jsi::Runtime &workerRt,
                                               static_cast<const jsi::Value *>(callArgs.data()),
                                               callArgs.size());
                                           jsi::Object promise = out.getObject(mainRt);
-                                          auto settle = [workerInvoker, resolve, reject](
+                                          // Captures ONLY the call id — never the
+                                          // worker's resolve/reject. See
+                                          // EventRegistry::pendingCalls.
+                                          auto settle = [workerInvoker, weakRegistry, callId](
                                                             bool ok, Message payload) {
                                             auto msg = std::make_shared<Message>(std::move(payload));
                                             workerInvoker->invokeAsync(
-                                                [ok, msg, resolve, reject](jsi::Runtime &workerRt) {
+                                                [ok, msg, weakRegistry, callId](jsi::Runtime &workerRt) {
+                                                  auto reg = weakRegistry.lock();
+                                                  if (!reg) return; // worker torn down
+                                                  std::shared_ptr<jsi::Function> resolve, reject;
+                                                  {
+                                                    std::lock_guard<std::mutex> lock(reg->mutex);
+                                                    auto it = reg->pendingCalls.find(callId);
+                                                    if (it == reg->pendingCalls.end()) return;
+                                                    resolve = it->second.first;
+                                                    reject = it->second.second;
+                                                    reg->pendingCalls.erase(it);
+                                                  }
                                                   try {
                                                     jsi::Value v =
                                                         facebook::react::workers::decode(workerRt, *msg);
@@ -422,8 +564,9 @@ jsi::Value makeModuleFunction(jsi::Runtime &workerRt,
 /// `global.expo.modules` — resolves module proxies lazily and caches them.
 class ExpoModulesHost : public jsi::HostObject {
  public:
-  explicit ExpoModulesHost(std::shared_ptr<CallInvoker> invoker)
-      : invoker_(std::move(invoker)) {}
+  ExpoModulesHost(std::shared_ptr<CallInvoker> invoker,
+                  std::shared_ptr<EventRegistry> registry)
+      : invoker_(std::move(invoker)), registry_(std::move(registry)) {}
 
   jsi::Value get(jsi::Runtime &rt, const jsi::PropNameID &propName) override {
     const std::string name = propName.utf8(rt);
@@ -432,7 +575,7 @@ class ExpoModulesHost : public jsi::HostObject {
       if (![RNWorkersExpoJSI hasModule:[NSString stringWithUTF8String:name.c_str()]]) {
         return jsi::Value::undefined();
       }
-      it = cache_.emplace(name, std::make_shared<ExpoModuleProxy>(name, invoker_)).first;
+      it = cache_.emplace(name, std::make_shared<ExpoModuleProxy>(name, invoker_, registry_)).first;
     }
     return jsi::Object::createFromHostObject(rt, it->second);
   }
@@ -447,6 +590,7 @@ class ExpoModulesHost : public jsi::HostObject {
 
  private:
   std::shared_ptr<CallInvoker> invoker_;
+  std::shared_ptr<EventRegistry> registry_;
   std::unordered_map<std::string, std::shared_ptr<ExpoModuleProxy>> cache_;
 };
 
@@ -462,8 +606,11 @@ class ExpoModulesHost : public jsi::HostObject {
 // such anchor, so the call site below is what pulls it in. (Same reasoning as
 // installAndroidMainThreadSchedulerFactory on the Android side.)
 //
-// Returns no teardown: this installer owns no per-worker native state — it only
-// proxies to the app's shared AppContext.
+// The returned teardown detaches this worker's event listeners. It is NOT
+// optional: Expo modules live on the app-lifetime AppContext, so a listener left
+// registered after the worker is terminated would outlive the runtime that owns
+// its callback, and releasing that jsi::Function later is a use-after-free. The
+// teardown runs on the worker thread with the runtime still alive (setPreDestroy).
 extern "C" void RNWorkersRegisterExpoSwiftJSIInstaller(void) {
   facebook::react::workers::setExpoModulesInstaller(
       [](jsi::Runtime &rt, std::shared_ptr<CallInvoker> invoker) -> std::function<void()> {
@@ -471,13 +618,14 @@ extern "C" void RNWorkersRegisterExpoSwiftJSIInstaller(void) {
           NSLog(@"[RNWorkerExpo] AppContext not registered yet; global.expo absent in this worker");
           return {};
         }
+        auto registry = std::make_shared<EventRegistry>();
         jsi::Object expo(rt);
         expo.setProperty(rt, "modules",
                          jsi::Object::createFromHostObject(
-                             rt, std::make_shared<ExpoModulesHost>(invoker)));
+                             rt, std::make_shared<ExpoModulesHost>(invoker, registry)));
         rt.global().setProperty(rt, "expo", std::move(expo));
         NSLog(@"[RNWorkerExpo] installed global.expo via Swift JSI bridge (SDK 56+)");
-        return {};
+        return [registry]() { registry->dispose(); };
       });
 }
 
