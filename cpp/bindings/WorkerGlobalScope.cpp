@@ -212,6 +212,39 @@ constexpr const char* kTransferGuard = R"JS(
     }
   }
 
+  // Views that ALREADY existed when the transfer happened cannot be rebuilt, so
+  // guard what can be guarded on them: every %TypedArray%.prototype and
+  // DataView.prototype method checks the buffer it is about to touch.
+  //
+  // Indexed access (`view[0]`) remains unguardable — integer-indexed exotic slots
+  // are not interceptable without turning every view into a Proxy, which would
+  // cost a trap per element and hand native modules something that is not a real
+  // TypedArray. That is the documented limit of this guard.
+  function guardMethods(target, names) {
+    if (!target) return;
+    names.forEach(function (m) {
+      var native = target[m];
+      if (typeof native !== 'function') return;
+      target[m] = function () {
+        if (this && transferred(this.buffer)) refuse('use');
+        return native.apply(this, arguments);
+      };
+    });
+  }
+  var typedProto =
+    g.Uint8Array && Object.getPrototypeOf(g.Uint8Array.prototype);
+  guardMethods(typedProto, [
+    'set', 'subarray', 'slice', 'fill', 'copyWithin', 'sort', 'reverse',
+    'indexOf', 'lastIndexOf', 'includes', 'join', 'forEach', 'map', 'filter',
+    'reduce', 'reduceRight', 'some', 'every', 'find', 'findIndex', 'at',
+  ]);
+  guardMethods(g.DataView && g.DataView.prototype, [
+    'getInt8', 'getUint8', 'getInt16', 'getUint16', 'getInt32', 'getUint32',
+    'getFloat32', 'getFloat64', 'getBigInt64', 'getBigUint64',
+    'setInt8', 'setUint8', 'setInt16', 'setUint16', 'setInt32', 'setUint32',
+    'setFloat32', 'setFloat64', 'setBigInt64', 'setBigUint64',
+  ]);
+
   // The chokepoint: refuse to build a view over transferred memory.
   var VIEWS = [
     'Uint8Array', 'Int8Array', 'Uint8ClampedArray',

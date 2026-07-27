@@ -114,3 +114,8 @@ export class UIWorker extends Worker {
   /** Native-only; a no-op on web. */
   static terminateRuntime(_source: WorkerSourceInput): void {}
 }
+
+/** Web fallback: nothing native to install. */
+export function installWorkerGlobals(): boolean {
+  return false;
+}

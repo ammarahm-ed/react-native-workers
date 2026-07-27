@@ -1217,7 +1217,15 @@ export default function TestsScreen() {
               } catch {
                 out.cloneThrew = true;
               }
-              // Documented residual hole, asserted so it cannot change silently.
+              // A pre-existing view: METHOD access is now refused...
+              try {
+                viewMadeBefore.fill(0);
+                out.staleMethodThrew = false;
+              } catch {
+                out.staleMethodThrew = true;
+              }
+              // ...but indexed access cannot be intercepted without making every
+              // view a Proxy. Asserted so this limit cannot change silently.
               out.staleViewStillReads = viewMadeBefore[0] === 5;
               // Untouched buffers must be unaffected by the guard.
               const other = new ArrayBuffer(8);
@@ -1243,6 +1251,7 @@ export default function TestsScreen() {
             afterTransfer.dataViewThrew === true &&
             afterTransfer.sliceThrew === true &&
             afterTransfer.cloneThrew === true &&
+            afterTransfer.staleMethodThrew === true &&
             // known limitation, not a pass-by-accident
             afterTransfer.staleViewStillReads === true &&
             afterTransfer.normalBufferOk === true,

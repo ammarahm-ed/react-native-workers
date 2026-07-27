@@ -115,6 +115,29 @@ export interface WorkerOptions {
 }
 
 /** Verifies the native/UI-thread worker API (a worker created from C++). */
+/**
+ * Installs the native globals (including the transferred-buffer access guard)
+ * without creating a Worker.
+ *
+ * Called at import time from src/index.tsx. The guard replaces the global view
+ * constructors, so anything that captured `Uint8Array` into a local BEFORE the
+ * patch keeps an unguarded reference — installing at import shrinks that window
+ * to whatever runs before this module is first imported, instead of leaving it
+ * open until the first Worker is constructed.
+ *
+ * Safe to call repeatedly and safe to fail: if the TurboModule is not ready this
+ * early in bridgeless startup, it stays uninstalled and the normal lazy path
+ * installs it later.
+ */
+export function installWorkerGlobals(): boolean {
+  try {
+    ensureInstalled();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function nativeWorkerSelfTest(): Promise<string> {
   return NativeReactNativeWorkers.nativeWorkerSelfTest();
 }
