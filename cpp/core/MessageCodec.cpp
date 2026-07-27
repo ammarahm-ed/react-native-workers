@@ -79,6 +79,21 @@ std::unordered_map<double, std::weak_ptr<MutableBuffer>>& storeRegistry() {
   return r;
 }
 
+// `if constexpr` only discards an UNINSTANTIATED branch inside a template — in a
+// plain function both branches are type-checked, so calling tryGetMutableBuffer
+// there fails to compile on a JSI that lacks it (RN 0.81 does). Templating on the
+// runtime type is what actually makes the call disappear.
+template <typename R>
+std::shared_ptr<MutableBuffer> takeStoreViaJsi(R& rt, const ArrayBuffer& ab) {
+  if constexpr (HasTryGetMutableBuffer<R>::value) {
+    return rt.tryGetMutableBuffer(ab);
+  } else {
+    (void)rt;
+    (void)ab;
+    return nullptr;
+  }
+}
+
 // Reaches an ArrayBuffer's backing store, or null when it cannot be shared.
 //
 // Our own buffers are resolved from the registry FIRST, which works on every RN
@@ -99,12 +114,7 @@ std::shared_ptr<MutableBuffer> tryTakeBackingStore(
       r.erase(it);
     }
   }
-  if constexpr (HasTryGetMutableBuffer<Runtime>::value) {
-    return rt.tryGetMutableBuffer(ab);
-  } else {
-    (void)ab;
-    return nullptr;
-  }
+  return takeStoreViaJsi(rt, ab);
 }
 
 // Simulated detachment.
