@@ -33,11 +33,15 @@ class WorkerNativeQueue {
   WorkerNativeQueue(const WorkerNativeQueue&) = delete;
   WorkerNativeQueue& operator=(const WorkerNativeQueue&) = delete;
 
-  void post(std::function<void()> task);
+  // Returns false when the queue is stopped and the task was NOT taken, so a
+  // caller holding a resource for it (a JNI global ref) can release it.
+  bool post(std::function<void()> task);
   // Runs `task` on the queue and waits. Inline when already on the queue thread,
   // so a module calling back into itself cannot deadlock against its own queue.
   void runSync(std::function<void()> task);
   bool isCurrentThread() const;
+  // False when the thread never started; callers should not dispatch to it.
+  bool isUsable() const;
 
  private:
   void pump();
@@ -73,6 +77,14 @@ class WorkerNativeMethodCallInvoker : public NativeMethodCallInvoker {
 long long registerWorkerNativeQueue(std::shared_ptr<WorkerNativeQueue> queue);
 void unregisterWorkerNativeQueue(long long queueId);
 std::shared_ptr<WorkerNativeQueue> lookupWorkerNativeQueue(long long queueId);
+
+// Remembers which queue belongs to which worker runtime, so a LATER installer on
+// the same worker (the Expo AppContext, installed after TurboModules in
+// Worker.cpp) can answer queue questions about the same thread instead of
+// falling back to the host's.
+void setWorkerNativeQueueIdForRuntime(void* runtime, long long queueId);
+long long workerNativeQueueIdForRuntime(void* runtime);
+void clearWorkerNativeQueueIdForRuntime(void* runtime);
 
 // Binds the Kotlin WorkerNativeQueue natives. Call on a JNI-attached thread with
 // the app class loader in scope. Idempotent; returns false if binding failed.

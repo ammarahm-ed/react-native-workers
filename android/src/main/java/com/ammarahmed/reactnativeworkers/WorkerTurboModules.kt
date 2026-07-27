@@ -173,6 +173,29 @@ object WorkerTurboModules {
       inner.createViewManagers(reactContext)
   }
 
+  /**
+   * Worker contexts by manager, so teardown can invalidate the one it built.
+   *
+   * `invalidateRuntime()` was only ever called on the Expo path, so a plain
+   * `nativeModules: true` worker left a JavaScriptContextHolder wrapping a freed
+   * jsi::Runtime — a late JSI install would have written into freed memory.
+   */
+  private val workerContexts =
+    java.util.Collections.synchronizedMap(
+      java.util.WeakHashMap<TurboModuleManager, WorkerReactContext>()
+    )
+
+  /**
+   * Called from C++ during teardown, AFTER the manager has been invalidated and
+   * while the worker runtime is still alive.
+   */
+  @JvmStatic
+  fun onWorkerTeardown(manager: TurboModuleManager) {
+    val context = workerContexts.remove(manager) ?: return
+    runCatching { context.invalidateRuntime() }
+    runCatching { context.detachModuleResolver() }
+  }
+
   /** Whether [initialize] has run — probed from C++ before attempting install. */
   @JvmStatic
   fun isReady(): Boolean = workerPackages != null
@@ -263,6 +286,7 @@ object WorkerTurboModules {
       )
     // Close the late binding: from here every peer lookup resolves worker-locally.
     managerRef = manager
+    workerContexts[manager] = workerContext
     return manager
   }
 }

@@ -8,6 +8,7 @@
 
 #include <android/log.h>
 
+#include <chrono>
 #include <unordered_map>
 #include <utility>
 
@@ -63,7 +64,9 @@ void postRunnableNative(JNIEnv* env, jclass, jlong queueId, jobject runnable) {
   auto queue = lookupWorkerNativeQueue(static_cast<long long>(queueId));
   if (!queue || !runnable) return;
   jobject ref = env->NewGlobalRef(runnable);
-  queue->post([ref]() {
+  // The ref must be released even when the queue refuses the task (torn down),
+  // otherwise every post after shutdown leaks a global ref.
+  bool accepted = queue->post([ref]() {
     JNIEnv* env = facebook::jni::Environment::current();
     jclass cls = env->GetObjectClass(ref);
     jmethodID run = env->GetMethodID(cls, "run", "()V");
@@ -77,6 +80,9 @@ void postRunnableNative(JNIEnv* env, jclass, jlong queueId, jobject runnable) {
     env->DeleteLocalRef(cls);
     env->DeleteGlobalRef(ref);
   });
+  if (!accepted) {
+    env->DeleteGlobalRef(ref);
+  }
 }
 
 } // namespace
@@ -94,7 +100,18 @@ WorkerNativeQueue::WorkerNativeQueue() {
     std::unique_lock<std::mutex> lock(mutex_);
     // threadId_ is written by pump() before it takes any task; wait for it so
     // isCurrentThread() is meaningful the moment the constructor returns.
-    cv_.wait(lock, [this] { return threadId_ != std::thread::id(); });
+    //
+    // BOUNDED: if the thread body never runs (a JVM attach failure inside the
+    // thread scope), an unconditional wait would block the worker's JS thread
+    // forever inside installWorkerTurboModules, with nothing logged. Time out and
+    // let the caller fall back instead.
+    if (!cv_.wait_for(lock, std::chrono::seconds(5), [this] {
+          return threadId_ != std::thread::id();
+        })) {
+      RNWQ_LOG("queue thread failed to start within 5s — this worker will fall "
+               "back to running module bodies inline");
+      stopped_ = true;
+    }
   }
 }
 
@@ -141,13 +158,14 @@ void WorkerNativeQueue::pump() {
   }
 }
 
-void WorkerNativeQueue::post(std::function<void()> task) {
+bool WorkerNativeQueue::post(std::function<void()> task) {
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (stopped_) return;
+    if (stopped_) return false;
     tasks_.push_back(std::move(task));
   }
   cv_.notify_one();
+  return true;
 }
 
 void WorkerNativeQueue::runSync(std::function<void()> task) {
@@ -179,6 +197,11 @@ void WorkerNativeQueue::runSync(std::function<void()> task) {
   cv->wait(lk, [&] { return *done; });
 }
 
+bool WorkerNativeQueue::isUsable() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return !stopped_ && threadId_ != std::thread::id();
+}
+
 bool WorkerNativeQueue::isCurrentThread() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return std::this_thread::get_id() == threadId_;
@@ -194,6 +217,39 @@ void WorkerNativeMethodCallInvoker::invokeSync(
     const std::string& /*methodName*/,
     NativeMethodCallFunc&& func) {
   queue_->runSync(std::move(func));
+}
+
+namespace {
+std::mutex& runtimeQueueMutex() {
+  static std::mutex m;
+  return m;
+}
+std::unordered_map<void*, long long>& runtimeQueueIds() {
+  static std::unordered_map<void*, long long> r;
+  return r;
+}
+} // namespace
+
+void setWorkerNativeQueueIdForRuntime(void* runtime, long long queueId) {
+  if (!runtime) return;
+  std::lock_guard<std::mutex> lock(runtimeQueueMutex());
+  if (queueId == 0) {
+    runtimeQueueIds().erase(runtime);
+  } else {
+    runtimeQueueIds()[runtime] = queueId;
+  }
+}
+
+long long workerNativeQueueIdForRuntime(void* runtime) {
+  if (!runtime) return 0;
+  std::lock_guard<std::mutex> lock(runtimeQueueMutex());
+  auto& r = runtimeQueueIds();
+  auto it = r.find(runtime);
+  return it == r.end() ? 0 : it->second;
+}
+
+void clearWorkerNativeQueueIdForRuntime(void* runtime) {
+  setWorkerNativeQueueIdForRuntime(runtime, 0);
 }
 
 long long registerWorkerNativeQueue(std::shared_ptr<WorkerNativeQueue> queue) {

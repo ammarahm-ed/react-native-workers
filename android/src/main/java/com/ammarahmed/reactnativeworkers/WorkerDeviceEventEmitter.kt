@@ -71,18 +71,32 @@ internal class WorkerDeviceEventEmitter(private val sinkId: Long) {
       Proxy.newProxyInstance(
         jsInterface.classLoader,
         arrayOf(jsInterface),
-      ) { _, method, args ->
+      ) { proxy, method, args ->
         when {
           method.name == "emit" && args != null && args.isNotEmpty() ->
             emit(args[0] as String, args.getOrNull(1))
           // Object methods still have to behave (logging, collections).
-          method.name == "toString" -> "WorkerDeviceEventEmitter(sink=$sinkId)"
-          method.name == "hashCode" -> sinkId.hashCode()
-          method.name == "equals" -> args?.getOrNull(0) === this
+          method.name == "toString" ->
+            "WorkerDeviceEventEmitter(sink=$sinkId, ${jsInterface.simpleName})"
+          // Identity must be the PROXY's, not this emitter's: comparing against
+          // `this` made proxy.equals(proxy) false — not reflexive — and one
+          // emitter's proxies for different interfaces collided on hashCode.
+          method.name == "hashCode" -> System.identityHashCode(proxy)
+          method.name == "equals" -> args?.getOrNull(0) === proxy
           else -> null
         }
       }
     }
+
+  /** Whether the caller is this worker's JS thread. */
+  fun isOnWorkerJsThread(): Boolean = sinkId != 0L && nativeIsOnWorkerJsThread(sinkId)
+
+  /** Runs [runnable] on this worker's JS thread. False when unavailable. */
+  fun postToWorkerJs(runnable: Runnable): Boolean {
+    if (sinkId == 0L) return false
+    nativePostToWorkerJs(sinkId, runnable)
+    return true
+  }
 
   private fun emit(eventName: String, data: Any?) {
     if (sinkId == 0L) return
@@ -121,5 +135,9 @@ internal class WorkerDeviceEventEmitter(private val sinkId: Long) {
      */
     @JvmStatic
     external fun nativeEmit(sinkId: Long, eventName: String, args: WritableNativeArray)
+
+    @JvmStatic external fun nativeIsOnWorkerJsThread(sinkId: Long): Boolean
+
+    @JvmStatic external fun nativePostToWorkerJs(sinkId: Long, runnable: Runnable)
   }
 }

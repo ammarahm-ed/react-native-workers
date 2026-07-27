@@ -73,12 +73,22 @@ std::function<void()> installExpoOnAndroidWorker(
     // The Kotlin bridge only exists in Expo apps (it's in a conditionally-compiled
     // source set). Use raw FindClass (+ ExceptionClear) rather than findClassStatic
     // so a non-Expo app is a quiet no-op, not a thrown/caught exception per worker.
-    jclass cls = env->FindClass(kBridgeClass);
-    if (!cls) {
+    jclass rawCls = env->FindClass(kBridgeClass);
+    if (!rawCls) {
       env->ExceptionClear();
       RNWEXPO_ALOG("WorkerExpoModules class absent (non-Expo app) -> no-op");
       return {};
     }
+    // Scoped: this function has six early returns and the local ref was leaked on
+    // every one of them, on a thread that lives as long as the worker.
+    struct LocalRefGuard {
+      JNIEnv* env;
+      jobject ref;
+      ~LocalRefGuard() {
+        if (ref) env->DeleteLocalRef(ref);
+      }
+    } clsGuard{env, rawCls};
+    jclass cls = rawCls;
 
     // Also requires the host to have registered its React context
     // (WorkerTurboModules.initialize) and the app to be an Expo app.
@@ -128,8 +138,13 @@ std::function<void()> installExpoOnAndroidWorker(
     long long sinkId = registerWorkerDeviceEventSink(workerInvoker);
     // The Expo context answers queue questions for the SAME worker, so it shares
     // the TurboModule path's queue when there is one; standalone (Expo without
-    // `nativeModules: true`) it simply has none and defers to the host.
-    long long queueId = 0;
+    // `nativeModules: true`) there is none and it defers to the host.
+    //
+    // This used to be hardcoded to 0 while the comment claimed otherwise, so an
+    // Expo module calling runOnNativeModulesQueueThread inside a worker landed on
+    // the HOST's NativeModules thread — the shared-thread dependency the queue
+    // exists to remove.
+    long long queueId = workerNativeQueueIdForRuntime(&rt);
 
     jobject handleLocal = env->CallStaticObjectMethod(
         cls,

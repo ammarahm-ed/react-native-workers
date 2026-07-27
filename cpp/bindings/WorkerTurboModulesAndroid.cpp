@@ -95,6 +95,9 @@ constexpr const char* kDeviceEmitterClass =
 
 struct DeviceEventSink {
   std::weak_ptr<CallInvoker> invoker;
+  // Recorded at install time, which runs ON the worker JS thread. Lets the
+  // worker's ReactContext answer isOnJSQueueThread() about the right thread.
+  std::thread::id jsThreadId;
 };
 
 std::mutex& sinkMutex() {
@@ -181,6 +184,49 @@ void emitDeviceEventNative(
   });
 }
 
+// True when the caller is the worker JS thread owning `sinkId`.
+jboolean isOnWorkerJsThreadNative(JNIEnv*, jclass, jlong sinkId) {
+  std::shared_ptr<DeviceEventSink> sink;
+  {
+    std::lock_guard<std::mutex> lock(sinkMutex());
+    auto& r = sinkRegistry();
+    auto it = r.find(static_cast<long long>(sinkId));
+    if (it != r.end()) sink = it->second;
+  }
+  return (sink && sink->jsThreadId == std::this_thread::get_id()) ? JNI_TRUE
+                                                                  : JNI_FALSE;
+}
+
+// Runs a Java Runnable on the worker's JS thread via its CallInvoker. A stale
+// sink drops the work and releases the ref rather than leaking it.
+void postToWorkerJsNative(JNIEnv* env, jclass, jlong sinkId, jobject runnable) {
+  if (!runnable) return;
+  std::shared_ptr<DeviceEventSink> sink;
+  {
+    std::lock_guard<std::mutex> lock(sinkMutex());
+    auto& r = sinkRegistry();
+    auto it = r.find(static_cast<long long>(sinkId));
+    if (it != r.end()) sink = it->second;
+  }
+  auto invoker = sink ? sink->invoker.lock() : nullptr;
+  if (!invoker) return;
+  jobject ref = env->NewGlobalRef(runnable);
+  invoker->invokeAsync([ref](Runtime&) {
+    // The worker JS thread is JVM-attached with the app class loader for its
+    // whole life (WorkerThreadScope), so plain JNI is safe here.
+    JNIEnv* env = facebook::jni::Environment::current();
+    jclass cls = env->GetObjectClass(ref);
+    jmethodID run = env->GetMethodID(cls, "run", "()V");
+    if (run) env->CallVoidMethod(ref, run);
+    if (env->ExceptionCheck()) {
+      env->ExceptionDescribe();
+      env->ExceptionClear();
+    }
+    env->DeleteLocalRef(cls);
+    env->DeleteGlobalRef(ref);
+  });
+}
+
 // Binds nativeEmit once. Called on the worker thread while JNI is attached with
 // the app class loader (the library has no JNI_OnLoad of its own — same idiom as
 // MainThreadScheduler).
@@ -195,8 +241,14 @@ bool ensureDeviceEmitterRegistered() {
           {"nativeEmit",
            "(JLjava/lang/String;Lcom/facebook/react/bridge/WritableNativeArray;)V",
            reinterpret_cast<void*>(&emitDeviceEventNative)},
+          {"nativeIsOnWorkerJsThread",
+           "(J)Z",
+           reinterpret_cast<void*>(&isOnWorkerJsThreadNative)},
+          {"nativePostToWorkerJs",
+           "(JLjava/lang/Runnable;)V",
+           reinterpret_cast<void*>(&postToWorkerJsNative)},
       };
-      if (env->RegisterNatives(cls.get(), methods, 1) != JNI_OK) {
+      if (env->RegisterNatives(cls.get(), methods, 3) != JNI_OK) {
         if (env->ExceptionCheck()) {
           env->ExceptionDescribe();
           env->ExceptionClear();
@@ -258,6 +310,7 @@ long long registerWorkerDeviceEventSink(
   static long long nextId = 1;
   auto sink = std::make_shared<DeviceEventSink>();
   sink->invoker = workerInvoker;
+  sink->jsThreadId = std::this_thread::get_id();
   std::lock_guard<std::mutex> lock(sinkMutex());
   long long id = nextId++;
   sinkRegistry()[id] = std::move(sink);
@@ -319,7 +372,7 @@ std::shared_ptr<_jobject> buildPlatformManager(
     // `isOnNativeModulesQueueThread()` answering about a different thread than
     // the one running the bodies.
     std::shared_ptr<NativeMethodCallInvoker> nmci;
-    if (nativeQueue && nativeQueueId != 0) {
+    if (nativeQueue && nativeQueue->isUsable() && nativeQueueId != 0) {
       nmci = std::make_shared<WorkerNativeMethodCallInvoker>(nativeQueue);
     } else {
       RNWTM_LOG("native queue unavailable -> module bodies run inline on the "
@@ -410,6 +463,10 @@ std::function<void(Runtime&)> installWorkerTurboModules(
     sinkId = registerWorkerDeviceEventSink(workerInvoker);
     nativeQueue = std::make_shared<WorkerNativeQueue>();
     queueId = registerWorkerNativeQueue(nativeQueue);
+    // Published so the Expo installer — which runs later on this same worker
+    // (Worker.cpp) — binds its AppContext's ReactContext to THIS queue rather
+    // than reporting the host's.
+    setWorkerNativeQueueIdForRuntime(&rt, queueId);
     manager = buildPlatformManager(rt, workerInvoker, sinkId, nativeQueue, queueId);
   }
 
@@ -447,6 +504,7 @@ std::function<void(Runtime&)> installWorkerTurboModules(
   // post to it; it stops and joins when this callback is destroyed.
   return [manager, sinkId, queueId, nativeQueue](Runtime&) {
     unregisterWorkerDeviceEventSink(sinkId);
+    clearWorkerNativeQueueIdForRuntime(&rt);
     JNIEnv* env = facebook::jni::Environment::current();
     jclass cls = env->GetObjectClass(manager.get());
     jmethodID invalidate = env->GetMethodID(cls, "invalidate", "()V");
@@ -458,6 +516,27 @@ std::function<void(Runtime&)> installWorkerTurboModules(
       env->ExceptionClear();
     }
     env->DeleteLocalRef(cls);
+
+    // Invalidate the worker's ReactContext: clears its JavaScriptContextHolder so
+    // a late JSI install cannot write into the runtime we are about to destroy,
+    // and drops the peer-module resolver. Previously only the Expo path did this.
+    try {
+      auto bridge = facebook::jni::findClassStatic(kBridgeClass);
+      jmethodID onTeardown = env->GetStaticMethodID(
+          bridge.get(),
+          "onWorkerTeardown",
+          "(Lcom/facebook/react/internal/turbomodule/core/TurboModuleManager;)V");
+      if (onTeardown) {
+        env->CallStaticVoidMethod(bridge.get(), onTeardown, manager.get());
+      }
+      if (env->ExceptionCheck()) {
+        env->ExceptionDescribe();
+        env->ExceptionClear();
+      }
+    } catch (const std::exception& e) {
+      RNWTM_LOG("worker context teardown failed: %s", e.what());
+    }
+
     // Now that every module has been invalidated, nothing else can post here.
     unregisterWorkerNativeQueue(queueId);
   };

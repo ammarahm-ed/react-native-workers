@@ -108,6 +108,18 @@ internal abstract class WorkerReactContext(
     }
   }
 
+  // --- JS queue: the worker's, never the host's ------------------------------
+  //
+  // `initializeFromOther(host)` copies the host's ReactQueueConfiguration, so a
+  // worker module calling `runOnJSQueueThread {}` ran on the RN JS thread —
+  // isolation rule 1, silently. The worker's JS thread is not a Looper thread and
+  // has no MessageQueueThread, so route through its CallInvoker instead.
+
+  override fun isOnJSQueueThread(): Boolean = deviceEventEmitter.isOnWorkerJsThread()
+
+  override fun runOnJSQueueThread(runnable: Runnable): Boolean =
+    deviceEventEmitter.postToWorkerJs(runnable) || super.runOnJSQueueThread(runnable)
+
   // --- everything else defers to the host ------------------------------------
 
   /**
@@ -151,6 +163,11 @@ internal abstract class WorkerReactContext(
 
   internal fun attachModuleResolver(resolver: (String) -> NativeModule?) {
     moduleResolver = resolver
+  }
+
+  /** Dropped at teardown so a late lookup cannot touch an invalidated manager. */
+  internal fun detachModuleResolver() {
+    moduleResolver = null
   }
 
   /**
