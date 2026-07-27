@@ -64,6 +64,23 @@ namespace {
 constexpr const char* kBridgeClass =
     "com/ammarahmed/reactnativeworkers/WorkerTurboModules";
 
+// Fallback when a worker's native queue could not be registered. Runs module
+// bodies inline on the worker JS thread — the pre-queue behaviour: not isolated,
+// but working and self-consistent. What must NEVER happen is dispatching bodies
+// to a queue the worker's ReactContext knows nothing about, because then
+// `assertOnNativeModulesQueueThread()` throws inside every module that asserts,
+// on the very thread its body is running on.
+class InlineNativeMethodCallInvoker : public NativeMethodCallInvoker {
+ public:
+  void invokeAsync(const std::string&, NativeMethodCallFunc&& func) noexcept
+      override {
+    func();
+  }
+  void invokeSync(const std::string&, NativeMethodCallFunc&& func) override {
+    func();
+  }
+};
+
 constexpr const char* kDeviceEmitterClass =
     "com/ammarahmed/reactnativeworkers/WorkerDeviceEventEmitter";
 
@@ -296,8 +313,19 @@ std::shared_ptr<_jobject> buildPlatformManager(
     auto ciHolder = CallInvokerHolder::newObjectCxxArgs(workerInvoker);
     // Module method bodies run on the worker's own native queue, never on its JS
     // thread — RN's model for the host, applied per worker.
-    std::shared_ptr<NativeMethodCallInvoker> nmci =
-        std::make_shared<WorkerNativeMethodCallInvoker>(nativeQueue);
+    //
+    // Only when the queue actually registered: the context is told `queueId`, so
+    // dispatching to the queue while `queueId == 0` would leave
+    // `isOnNativeModulesQueueThread()` answering about a different thread than
+    // the one running the bodies.
+    std::shared_ptr<NativeMethodCallInvoker> nmci;
+    if (nativeQueue && nativeQueueId != 0) {
+      nmci = std::make_shared<WorkerNativeMethodCallInvoker>(nativeQueue);
+    } else {
+      RNWTM_LOG("native queue unavailable -> module bodies run inline on the "
+                "worker JS thread");
+      nmci = std::make_shared<InlineNativeMethodCallInvoker>();
+    }
     auto nmciHolder = NativeMethodCallInvokerHolder::newObjectCxxArgs(nmci);
 
     jmethodID install = env->GetStaticMethodID(
@@ -403,14 +431,22 @@ std::function<void(Runtime&)> installWorkerTurboModules(
   // body, so JNI is available. `manager` is released when this callback is
   // destroyed (its deleter is thread-safe).
   //
-  // The sink is dropped FIRST: a module may emit from its own thread while we're
-  // invalidating, and dropping the sink makes that a no-op instead of a post onto
-  // a runtime that is about to be destroyed.
-  // `nativeQueue` is captured so the queue outlives the modules that post to it;
-  // it stops and joins when this callback is destroyed, after invalidation.
+  // Order matters, and it is NOT symmetric between the two registrations:
+  //
+  //   sink   -> dropped FIRST. A module may emit from its own thread while we are
+  //             invalidating; dropping the sink makes that a no-op rather than a
+  //             post onto a runtime about to be destroyed.
+  //   queue  -> dropped LAST, AFTER invalidate(). TurboModuleManager.invalidate()
+  //             calls invalidate() on every module, and modules legitimately hand
+  //             cleanup to runOnNativeModulesQueueThread. Unregistering first made
+  //             that lookup miss, so teardown work was silently dropped and
+  //             assertOnNativeModulesQueueThread() asserted against the HOST's
+  //             queue and threw mid-teardown.
+  //
+  // `nativeQueue` is still captured so the queue object outlives the modules that
+  // post to it; it stops and joins when this callback is destroyed.
   return [manager, sinkId, queueId, nativeQueue](Runtime&) {
     unregisterWorkerDeviceEventSink(sinkId);
-    unregisterWorkerNativeQueue(queueId);
     JNIEnv* env = facebook::jni::Environment::current();
     jclass cls = env->GetObjectClass(manager.get());
     jmethodID invalidate = env->GetMethodID(cls, "invalidate", "()V");
@@ -422,6 +458,8 @@ std::function<void(Runtime&)> installWorkerTurboModules(
       env->ExceptionClear();
     }
     env->DeleteLocalRef(cls);
+    // Now that every module has been invalidated, nothing else can post here.
+    unregisterWorkerNativeQueue(queueId);
   };
 }
 

@@ -50,9 +50,17 @@ internal class WorkerDeviceEventEmitter(private val sinkId: Long) {
 
   private val proxies = ConcurrentHashMap<Class<*>, Any>()
 
-  /** Whether this emitter should serve [jsInterface] instead of the host. */
+  /**
+   * Whether this emitter should serve [jsInterface] instead of the host.
+   *
+   * False when the sink never registered (a failed `RegisterNatives`), because
+   * claiming the interface and then dropping every event is worse than not
+   * claiming it: XHR never resolves and NativeEventEmitter never fires, with
+   * nothing logged at emit time. Deferring to the host emitter is wrong for
+   * isolation but at least observable and working.
+   */
   fun serves(jsInterface: Class<*>): Boolean =
-    jsInterface.simpleName in EMITTER_INTERFACES
+    sinkId != 0L && jsInterface.simpleName in EMITTER_INTERFACES
 
   /**
    * A [jsInterface] implementation whose `emit` reaches this worker. Cached per

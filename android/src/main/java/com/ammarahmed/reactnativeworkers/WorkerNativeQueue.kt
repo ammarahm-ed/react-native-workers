@@ -32,10 +32,17 @@ internal object WorkerNativeQueue {
   @JvmStatic
   fun isOnAnyQueueThread(): Boolean = isQueueThread.get() == true
 
-  /** Whether the calling thread is the queue thread for [queueId] specifically. */
+  /**
+   * Whether the calling thread is the queue thread for [queueId] specifically.
+   *
+   * Deliberately does NOT short-circuit on [isOnAnyQueueThread]: that flag is set
+   * by a JNI call at thread startup which can fail, and a false negative here is
+   * not cosmetic — it makes `assertOnNativeModulesQueueThread()` throw inside
+   * every module that asserts, on the very thread its body is running on. The
+   * native check is the authority.
+   */
   @JvmStatic
-  fun isOnQueue(queueId: Long): Boolean =
-    queueId != 0L && isOnAnyQueueThread() && nativeIsOnQueue(queueId)
+  fun isOnQueue(queueId: Long): Boolean = queueId != 0L && nativeIsOnQueue(queueId)
 
   /** Runs [runnable] on [queueId]'s thread. A stale id drops the work. */
   @JvmStatic
