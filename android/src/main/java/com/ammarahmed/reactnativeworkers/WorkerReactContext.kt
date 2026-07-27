@@ -168,19 +168,43 @@ internal abstract class WorkerReactContext(
     return try {
       resolver(name)
     } catch (t: Throwable) {
+      // Never silent: "construction failed" and "not one of ours" are different
+      // facts, and the caller is about to be handed the HOST's instance instead.
+      android.util.Log.w("RNWorkerTM", "worker module '$name' failed to build: $t")
       null
     } finally {
       inFlight.remove(name)
     }
   }
 
-  /** The `@ReactModule` name RN registers a module class under, if annotated. */
+  /**
+   * The name RN registers a module class under.
+   *
+   * `@ReactModule` first, falling back to the class's simple name. Most old-arch
+   * modules carry no annotation, and returning null for those meant they never
+   * even attempted worker-local resolution — they went straight to the host.
+   */
   private fun moduleNameOf(cls: Class<*>): String? =
-    cls.getAnnotation(ReactModule::class.java)?.name
+    cls.getAnnotation(ReactModule::class.java)?.name ?: cls.simpleName
 
-  override fun <T : NativeModule> hasNativeModule(nativeModuleInterface: Class<T>): Boolean =
-    moduleNameOf(nativeModuleInterface)?.let { workerModule(it) != null } == true ||
+  /**
+   * Whether a name is denied to workers (UIManager, SurfaceRegistry, …).
+   *
+   * The denylist stops JS resolution, but these accessors used to fall through to
+   * the host on a miss — handing a worker module the host's live UIManager,
+   * callable from the worker's JS thread or its native queue. That is precisely
+   * what denial exists to prevent, so denied names resolve to nothing here rather
+   * than to the host's instance.
+   */
+  private fun isDeniedForWorkers(name: String?): Boolean =
+    name != null && WorkerTurboModules.isDenied(name)
+
+  override fun <T : NativeModule> hasNativeModule(nativeModuleInterface: Class<T>): Boolean {
+    val name = moduleNameOf(nativeModuleInterface)
+    if (isDeniedForWorkers(name)) return false
+    return (name?.let { workerModule(it) != null } == true) ||
       host.hasNativeModule(nativeModuleInterface)
+  }
 
   // The worker's manager builds modules lazily, so it has no meaningful "all
   // modules" answer; this stays the host's list.
@@ -189,6 +213,7 @@ internal abstract class WorkerReactContext(
   @Suppress("UNCHECKED_CAST")
   override fun <T : NativeModule> getNativeModule(nativeModuleInterface: Class<T>): T? {
     val name = moduleNameOf(nativeModuleInterface)
+    if (isDeniedForWorkers(name)) return null
     if (name != null) {
       val worker = workerModule(name)
       if (worker != null && nativeModuleInterface.isInstance(worker)) {
@@ -198,8 +223,10 @@ internal abstract class WorkerReactContext(
     return host.getNativeModule(nativeModuleInterface)
   }
 
-  override fun getNativeModule(moduleName: String): NativeModule? =
-    workerModule(moduleName) ?: host.getNativeModule(moduleName)
+  override fun getNativeModule(moduleName: String): NativeModule? {
+    if (isDeniedForWorkers(moduleName)) return null
+    return workerModule(moduleName) ?: host.getNativeModule(moduleName)
+  }
 
   override fun getCatalystInstance(): CatalystInstance = host.catalystInstance
 
@@ -221,7 +248,9 @@ internal abstract class WorkerReactContext(
 
   @Deprecated("Use UIManagerHelper.getUIManager() instead.")
   @Suppress("DEPRECATION")
-  override fun getFabricUIManager(): UIManager? = host.fabricUIManager
+  // A worker has no view hierarchy; handing back the host's UIManager would let
+  // worker code touch views off the UI thread (see isDeniedForWorkers).
+  override fun getFabricUIManager(): UIManager? = null
 
   override fun getSourceURL(): String? = host.sourceURL
 

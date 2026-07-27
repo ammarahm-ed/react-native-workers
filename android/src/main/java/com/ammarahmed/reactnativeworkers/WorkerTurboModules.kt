@@ -122,6 +122,14 @@ object WorkerTurboModules {
       "BlobModule",
     )
 
+  /**
+   * Whether [name] is denied to workers. Read by [WorkerReactContext] so its
+   * native-module accessors cannot hand back the host's instance of a module that
+   * was denied at the package level.
+   */
+  @JvmStatic
+  internal fun isDenied(name: String): Boolean = name in DENIED_MODULES
+
   /** Wraps a package so denied module names are invisible to the delegate. */
   private fun denyFilter(pkg: ReactPackage): ReactPackage =
     when (pkg) {
@@ -215,6 +223,32 @@ object WorkerTurboModules {
         deviceEventSinkId,
         nativeQueueId,
       )
+    // The resolver is attached BEFORE the delegate is built, not after.
+    //
+    // Building the delegate runs `ReactPackageTurboModuleManagerDelegate.initialize`,
+    // which eagerly calls `createNativeModules(workerContext)` on every non-lazy
+    // (old-arch) package. Attaching afterwards meant any module whose CONSTRUCTOR
+    // asked the context for a peer was handed the host's instance — the exact
+    // contamination worker-local resolution exists to prevent.
+    //
+    // Late-bound because the manager cannot exist yet. A peer requested during
+    // that window still falls back to the host — there is nothing else to resolve
+    // from — but it is now logged instead of silent.
+    var managerRef: TurboModuleManager? = null
+    workerContext.attachModuleResolver { name ->
+      val ready = managerRef
+      if (ready == null) {
+        android.util.Log.w(
+          "RNWorkerTM",
+          "peer module '$name' requested while the worker's manager was still " +
+            "being built — falling back to the host's instance",
+        )
+        null
+      } else {
+        ready.getModule(name)
+      }
+    }
+
     val delegate =
       DefaultTurboModuleManagerDelegate.Builder()
         .setPackages(packages)
@@ -227,9 +261,8 @@ object WorkerTurboModules {
         jsCallInvokerHolder,
         nativeMethodCallInvokerHolder,
       )
-    // Now that the manager exists, let the context resolve peer modules from it
-    // instead of handing back the host's instances (see WorkerReactContext).
-    workerContext.attachModuleResolver { name -> manager.getModule(name) }
+    // Close the late binding: from here every peer lookup resolves worker-locally.
+    managerRef = manager
     return manager
   }
 }
