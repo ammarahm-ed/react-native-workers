@@ -116,17 +116,10 @@ export interface WorkerOptions {
 
 /** Verifies the native/UI-thread worker API (a worker created from C++). */
 /**
- * Installs the native globals (including the transferred-buffer access guard)
- * without creating a Worker.
- *
- * Called at import time from src/index.tsx. The guard replaces the global view
- * constructors, so anything that captured `Uint8Array` into a local BEFORE the
- * patch keeps an unguarded reference — installing at import shrinks that window
- * to whatever runs before this module is first imported, instead of leaving it
- * open until the first Worker is constructed.
+ * Installs this library's native globals without creating a Worker.
  *
  * Safe to call repeatedly and safe to fail: if the TurboModule is not ready this
- * early in bridgeless startup, it stays uninstalled and the normal lazy path
+ * early in bridgeless startup it stays uninstalled and the normal lazy path
  * installs it later.
  */
 export function installWorkerGlobals(): boolean {
@@ -136,6 +129,44 @@ export function installWorkerGlobals(): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * OPT-IN: make use-after-transfer throw instead of silently racing the new owner.
+ *
+ * Transferring an ArrayBuffer hands its memory to the receiver, but JSI cannot
+ * detach the sender's buffer, so by default the sender can still read and write
+ * memory it no longer owns — a data race (it cannot crash; the store is
+ * refcounted and outlives both sides). Enabling this makes those accesses fail
+ * loudly.
+ *
+ * It is off by default because it PATCHES GLOBALS in whichever runtime it is
+ * enabled in — the typed-array constructors and the %TypedArray% / DataView
+ * prototype methods. Consequences worth accepting deliberately:
+ *
+ *   - `value.constructor === Uint8Array` stops matching. The constructor
+ *     resolves through the prototype to the native one, while the global is now
+ *     a wrapper. Some serialization libraries test exactly this.
+ *   - Every view construction pays a `Reflect.construct`, and every
+ *     fill/set/subarray/forEach pays a buffer check — app-wide, including React
+ *     Native's own code and third-party libraries, not only worker code.
+ *   - It can collide with other libraries that patch the same globals.
+ *
+ * What is ALWAYS on, needing no opt-in: this library's own message path refuses
+ * to clone or re-transfer a buffer that was already transferred, and
+ * `ArrayBuffer.prototype.detached` reports it.
+ *
+ * Enable once, early, before handing buffers to workers. Workers started
+ * afterwards inherit it. Returns false if the guard could not be installed.
+ *
+ * KNOWN LIMIT even when enabled: a view created BEFORE the transfer can still be
+ * read by index (`view[0]`). Its method calls throw, but integer-indexed slots
+ * are not interceptable without making every view a Proxy.
+ */
+export function enableTransferGuard(): boolean {
+  if (!installWorkerGlobals()) return false;
+  const install = globalThis.__rnworkersInstallTransferGuard;
+  return typeof install === 'function' ? install() === true : false;
 }
 
 export function nativeWorkerSelfTest(): Promise<string> {

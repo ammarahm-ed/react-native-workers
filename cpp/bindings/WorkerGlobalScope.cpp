@@ -2,6 +2,7 @@
 
 #include "../core/MessageCodec.h"
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <utility>
@@ -276,6 +277,34 @@ constexpr const char* kTransferGuard = R"JS(
 })();
 )JS";
 
+// Process-wide because a worker's runtime is created long after the app decides.
+std::atomic<bool>& transferGuardFlag() {
+  static std::atomic<bool> enabled{false};
+  return enabled;
+}
+
+bool transferGuardEnabled() {
+  return transferGuardFlag().load(std::memory_order_relaxed);
+}
+
+void setTransferGuardEnabled(bool enabled) {
+  transferGuardFlag().store(enabled, std::memory_order_relaxed);
+}
+
+// Idempotent (the script early-returns if already installed). Returns false when
+// evaluation failed, which is never fatal: without the guard, transfer is exactly
+// as safe as it was before.
+bool installTransferGuard(Runtime& rt) {
+  try {
+    rt.evaluateJavaScript(
+        std::make_shared<const StringBuffer>(kTransferGuard),
+        "rnworkers-transfer-guard.js");
+    return true;
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+
 void installStructuredClone(Runtime& rt) {
   // An ArrayBuffer whose backing store WE own.
   //
@@ -335,15 +364,32 @@ void installStructuredClone(Runtime& rt) {
       "__rnworkersZeroCopyTransfer",
       Value(supportsZeroCopyTransfer()));
 
-  // Make use-after-transfer fail loudly instead of racing the new owner.
-  try {
-    rt.evaluateJavaScript(
-        std::make_shared<const StringBuffer>(kTransferGuard),
-        "rnworkers-transfer-guard.js");
-  } catch (const std::exception& e) {
-    // Never fatal: without the guard, transfer is exactly as safe as it was
-    // before — the message path itself already rejects a transferred buffer.
-    (void)e;
+  // The transferred-buffer guard is OPT-IN, and deliberately so.
+  //
+  // It works by replacing the global typed-array constructors and patching
+  // %TypedArray%.prototype methods, which is a large blast radius for a library:
+  // `value.constructor === Uint8Array` stops matching (the constructor resolves
+  // through the prototype to the native one while the global is the wrapper),
+  // every view construction pays a Reflect.construct, and every fill/set/forEach
+  // pays a buffer check — in the HOST runtime that means React Native internals
+  // and every third-party library, not just code that touches workers.
+  //
+  // So it is off unless an app asks for it. What is ALWAYS on is the checking we
+  // do inside our own message path — cloning or re-transferring a transferred
+  // buffer throws — because that costs nothing and touches nobody else's code.
+  setHostFn(
+      rt,
+      "__rnworkersInstallTransferGuard",
+      0,
+      [](Runtime& rt, const Value&, const Value*, size_t) -> Value {
+        setTransferGuardEnabled(true);
+        return Value(installTransferGuard(rt));
+      });
+
+  // Already enabled process-wide (an app called it before this worker started):
+  // apply it here too, so a worker created later behaves like the rest.
+  if (transferGuardEnabled()) {
+    installTransferGuard(rt);
   }
 
   // `ArrayBuffer.prototype.detached` is a real spec getter, and the only part of

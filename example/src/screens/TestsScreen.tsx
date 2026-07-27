@@ -13,6 +13,7 @@ import {
   UIWorker,
   SharedStore,
   SharedBuffer,
+  enableTransferGuard,
 } from '@ammarahmed/react-native-workers';
 import { runConformance } from '../conformance';
 import { runBridgeTests } from '../bridgeTests';
@@ -1171,6 +1172,21 @@ export default function TestsScreen() {
         // working, because JSI cannot detach it.
         const afterTransfer = await new Promise<any>((resolve) => {
           try {
+            // Off by default (it patches globals), so the test opts in — and
+            // checks that opting in is what turns it on.
+            const beforeOptIn = (() => {
+              try {
+                const probe = new ArrayBuffer(8);
+                Object.defineProperty(probe, '__rnworkersTransferred', {
+                  value: true,
+                });
+                new Uint8Array(probe); // eslint-disable-line no-new
+                return 'allowed';
+              } catch {
+                return 'blocked';
+              }
+            })();
+            const enabled = enableTransferGuard();
             const mk = (globalThis as any).createTransferableBuffer;
             const ab: ArrayBuffer = mk ? mk(1024) : new ArrayBuffer(1024);
             const viewMadeBefore = new Uint8Array(ab);
@@ -1186,7 +1202,7 @@ export default function TestsScreen() {
             w.onmessage = () => {
               clearTimeout(timer);
               w.terminate();
-              const out: any = {};
+              const out: any = { beforeOptIn, enabled };
 
               out.detached = (ab as any).detached === true;
               out.byteLengthZero = ab.byteLength === 0;
@@ -1245,7 +1261,10 @@ export default function TestsScreen() {
         all.push({
           name: 'transferred ArrayBuffer refuses new access on the sender',
           pass:
-            afterTransfer?.detached === true &&
+            // the guard is opt-in: nothing was patched until we asked
+            afterTransfer?.beforeOptIn === 'allowed' &&
+            afterTransfer.enabled === true &&
+            afterTransfer.detached === true &&
             afterTransfer.byteLengthZero === true &&
             afterTransfer.newViewThrew === true &&
             afterTransfer.dataViewThrew === true &&

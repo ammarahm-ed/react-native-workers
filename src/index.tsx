@@ -1,20 +1,10 @@
-import { installWorkerGlobals } from './Worker';
-
 export {
   Worker,
   UIWorker,
   nativeWorkerSelfTest,
   installWorkerGlobals,
+  enableTransferGuard,
 } from './Worker';
-
-// Install at IMPORT time, not at first Worker construction.
-//
-// The transferred-buffer guard works by replacing the global typed-array
-// constructors, so any code holding a reference captured before the patch keeps
-// an unguarded one. Importing this library is the earliest hook we have; failure
-// is swallowed (the lazy path installs later) so a not-yet-ready native module
-// can never break an import.
-installWorkerGlobals();
 export { SharedStore } from './SharedStore';
 export type { StoreListener, Unsubscribe } from './SharedStore';
 export { SharedValue } from './SharedValue';

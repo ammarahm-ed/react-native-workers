@@ -119,3 +119,11 @@ export class UIWorker extends Worker {
 export function installWorkerGlobals(): boolean {
   return false;
 }
+
+/**
+ * Web fallback: the browser detaches transferred buffers itself, so there is
+ * nothing to emulate and nothing to patch.
+ */
+export function enableTransferGuard(): boolean {
+  return false;
+}
