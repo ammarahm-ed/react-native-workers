@@ -59,15 +59,44 @@ jobs:
           key: gradle-e2e-${{ hashFiles('example/android/**/*.gradle*', 'android/**/*.gradle*') }}
           restore-keys: gradle-e2e-
 
-      # The Android SDK is preinstalled on the runner; only the system image and
-      # an AVD are missing. Done inline rather than via a third-party action so
-      # this workflow adds no dependency that would need SHA-pinning.
+      # The Android SDK is preinstalled on the runner, but only platform-tools is
+      # on PATH — sdkmanager/avdmanager live under cmdline-tools/<version>/bin,
+      # and the emulator is not installed at all. Resolve them explicitly and
+      # export the paths for the later steps.
+      #
+      # Done inline rather than via a third-party action so this workflow adds no
+      # dependency that would need SHA-pinning.
+      - name: Locate Android SDK tools
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          [ -d "$SDK" ] || { echo "::error::no Android SDK at $SDK"; exit 1; }
+
+          # cmdline-tools is versioned (latest/, 16.0/, …) — take the newest.
+          CLI_BIN=$(ls -d "$SDK"/cmdline-tools/*/bin 2>/dev/null | sort -V | tail -1 || true)
+          if [ -z "$CLI_BIN" ] || [ ! -x "$CLI_BIN/sdkmanager" ]; then
+            echo "::error::no cmdline-tools/*/bin/sdkmanager under $SDK"
+            ls -la "$SDK" "$SDK/cmdline-tools" 2>/dev/null || true
+            exit 1
+          fi
+
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "$CLI_BIN" >> "$GITHUB_PATH"
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          echo "$SDK/emulator" >> "$GITHUB_PATH"
+          echo "Using cmdline-tools: $CLI_BIN"
+
       - name: Create AVD
         run: |
           set -euo pipefail
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          sdkmanager --install "system-images;android-34;google_apis;x86_64" >/dev/null
-          echo no | avdmanager create avd -n e2e -k "system-images;android-34;google_apis;x86_64" --force
+          IMAGE="system-images;android-34;google_apis;x86_64"
+          # `yes |` exits on SIGPIPE once sdkmanager stops reading; that is normal
+          # and must not trip pipefail, hence the subshell + `|| true`.
+          (yes | sdkmanager --licenses >/dev/null 2>&1) || true
+          sdkmanager --install "platform-tools" "emulator" "$IMAGE" >/dev/null
+          echo no | avdmanager create avd -n e2e -k "$IMAGE" --force
+          "$ANDROID_HOME/emulator/emulator" -list-avds
 
       - name: Boot emulator
         run: |
@@ -90,8 +119,7 @@ jobs:
       - name: Start Metro (tests screen)
         run: |
           set -euo pipefail
-          RN_WORKERS_SCREEN=tests nohup yarn example start --reset-cache \
-            > "$RUNNER_TEMP/metro.log" 2>&1 &
+          nohup yarn example start:tests > "$RUNNER_TEMP/metro.log" 2>&1 &
           for _ in $(seq 1 60); do
             curl -sf http://localhost:8081/status >/dev/null && break
             sleep 3

@@ -55,30 +55,4 @@ echo "::endgroup::"
 # tend to surface), so check regardless of the result line.
 CRASHES=$(adb logcat -d 2>/dev/null | grep -cE "Abort message|FATAL EXCEPTION" || true)
 
-python3 - "$RESULT_LINE" "$CRASHES" <<'PY'
-import re, sys
-
-line, crashes = sys.argv[1], int(sys.argv[2] or 0)
-
-m = re.search(r'RNWORKERS-RESULTS\]\s+(\d+)/(\d+)', line)
-if not m:
-    print("::error::could not parse the results header")
-    sys.exit(1)
-passed, total = int(m.group(1)), int(m.group(2))
-
-# logcat truncates very long lines, so parse entries leniently rather than
-# requiring the JSON array to be closed.
-entries = re.findall(r'\{"n":"(.*?)","p":(true|false)(?:,"d":"(.*?)")?', line)
-failures = [(n, d) for n, p, d in entries if p == 'false']
-
-print(f"suite: {passed}/{total} passed  ({len(entries)} entries parsed from the log)")
-for n, d in failures:
-    print(f"::error::FAILED {n} — {d or 'no detail'}")
-
-if crashes:
-    print(f"::error::{crashes} native crash marker(s) in logcat")
-
-if passed != total or failures or crashes:
-    sys.exit(1)
-print("All tests passed with no native crashes.")
-PY
+python3 "$(dirname "$0")/assert_suite.py" "$RESULT_LINE" "$CRASHES"

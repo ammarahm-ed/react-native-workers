@@ -1,0 +1,103 @@
+name: E2E (iOS)
+
+# The iOS half of the runtime suite. Same idea as e2e-android.yml: compile-only
+# checks cannot see an installer that preprocessed itself out, a jsi value
+# released on the wrong runtime's thread, or a listener registered twice — and
+# the iOS-specific paths (per-worker RCTTurboModuleManager, the Expo SDK 56+
+# Swift shim, event bridging from the main runtime) have no Android equivalent to
+# stand in for them.
+#
+# A macOS runner costs ~10x a Linux one, so this does NOT run on every PR by
+# default. It runs on main, on demand, and on PRs that carry the `e2e-ios` label
+# — add the label when a PR touches ios/ or the Expo integration.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  example-suite:
+    name: example app suite (simulator)
+    # Skipped rather than gated at the `on:` level so the check still appears on
+    # every PR, with an explicit "not run" instead of silently missing.
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'e2e-ios')
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      # Xcode bakes absolute paths and -g flags into every compile; without these
+      # the cache misses on almost everything. Matches compat-matrix.yml.
+      CCACHE_HASHDIR: 'false'
+      CCACHE_SLOPPINESS: 'clang_index_store,file_stat_matches,include_file_ctime,include_file_mtime,ivfsoverlay,pch_defines,modules,system_headers,time_macros'
+      CCACHE_FILECLONE: 'true'
+      CCACHE_DEPEND: 'true'
+      CCACHE_INODECACHE: 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Setup
+        uses: ./.github/actions/setup
+
+      - name: Install ccache
+        run: brew install ccache
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/ccache
+          key: ccache-e2e-ios-${{ github.sha }}
+          restore-keys: ccache-e2e-ios-
+
+      - name: Cache Pods
+        uses: actions/cache@v4
+        with:
+          path: example/ios/Pods
+          key: pods-e2e-ios-${{ hashFiles('example/ios/Podfile.lock', '*.podspec') }}
+          restore-keys: pods-e2e-ios-
+
+      # RN_WORKERS_SCREEN is inlined by Babel when METRO transforms the file, so
+      # it must be set on the Metro process — not on the app build.
+      - name: Start Metro (tests screen)
+        run: |
+          set -euo pipefail
+          nohup yarn example start:tests > "$RUNNER_TEMP/metro.log" 2>&1 &
+          for _ in $(seq 1 60); do
+            curl -sf http://localhost:8081/status >/dev/null && break
+            sleep 3
+          done
+          curl -sf http://localhost:8081/status || {
+            echo "::error::Metro failed to start"; tail -40 "$RUNNER_TEMP/metro.log"; exit 1; }
+
+      - name: Build, run and assert the suite
+        run: .github/scripts/run-ios-e2e.sh
+
+      - name: Collect diagnostics
+        if: failure()
+        run: |
+          mkdir -p "$RUNNER_TEMP/diag"
+          cp "$RUNNER_TEMP/app-console.log" "$RUNNER_TEMP/diag/" 2>/dev/null || true
+          cp "$RUNNER_TEMP/metro.log" "$RUNNER_TEMP/diag/" 2>/dev/null || true
+          cp ~/Library/Logs/DiagnosticReports/ReactNativeWorkersExample* \
+            "$RUNNER_TEMP/diag/" 2>/dev/null || true
+          ccache -s > "$RUNNER_TEMP/diag/ccache-stats.txt" 2>&1 || true
+
+      - name: Upload diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: e2e-ios-diagnostics
+          path: ${{ runner.temp }}/diag
+          retention-days: 7
+
+      - name: Cleanup simulator
+        if: always()
+        run: xcrun simctl delete rnworkers-e2e || true
