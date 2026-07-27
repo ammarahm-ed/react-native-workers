@@ -215,7 +215,20 @@ void installStructuredClone(Runtime& rt) {
         objectCtor.getPropertyAsFunction(rt, "getOwnPropertyDescriptor");
     Value existing = getOwn.call(
         rt, Value(rt, proto), String::createFromAscii(rt, "detached"));
-    if (!existing.isObject()) {
+    // Newer Hermes defines this getter natively (arrayBufferPrototypeDetached).
+    // Compose with it rather than skipping: the engine answers whether the buffer
+    // is REALLY detached, we answer whether it was transferred through us. Skipping
+    // would silently drop our signal the day RN ships that Hermes; shadowing would
+    // hide a true detachment. Either alone is a wrong answer.
+    std::shared_ptr<Function> nativeGetter;
+    if (existing.isObject()) {
+      Value g = existing.getObject(rt).getProperty(rt, "get");
+      if (g.isObject() && g.asObject(rt).isFunction(rt)) {
+        nativeGetter =
+            std::make_shared<Function>(g.asObject(rt).asFunction(rt));
+      }
+    }
+    {
       Function defineProperty =
           objectCtor.getPropertyAsFunction(rt, "defineProperty");
       Object descriptor(rt);
@@ -226,11 +239,18 @@ void installStructuredClone(Runtime& rt) {
               rt,
               PropNameID::forAscii(rt, "detached"),
               0,
-              [](Runtime& rt, const Value& thisVal, const Value*, size_t)
+              [nativeGetter](
+                  Runtime& rt, const Value& thisVal, const Value*, size_t)
                   -> Value {
                 if (!thisVal.isObject()) return Value(false);
-                Value marked = thisVal.getObject(rt).getProperty(
-                    rt, "__rnworkersTransferred");
+                Object self = thisVal.getObject(rt);
+                if (nativeGetter) {
+                  Value engineSaysDetached = nativeGetter->callWithThis(rt, self);
+                  if (engineSaysDetached.isBool() && engineSaysDetached.getBool()) {
+                    return Value(true);
+                  }
+                }
+                Value marked = self.getProperty(rt, "__rnworkersTransferred");
                 return Value(marked.isBool() && marked.getBool());
               }));
       descriptor.setProperty(rt, "configurable", Value(true));
