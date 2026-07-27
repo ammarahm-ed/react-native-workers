@@ -1,0 +1,118 @@
+name: E2E (Android)
+
+# Runs the example app's in-app test suite on a real emulator and fails the build
+# on any failed test or native crash.
+#
+# The compat matrix only COMPILES against each RN/Expo version. That cannot catch
+# the failure modes this library actually has: an installer that compiles out and
+# silently does nothing, a jsi value released on the wrong runtime's thread, a
+# listener registered twice per subscribe/remove cycle. All of those build clean
+# and only show up when a worker really runs — hence this job.
+#
+# Android only, on purpose: the emulator runs on Linux pricing, while an iOS
+# simulator job would need a macOS runner (~10x) for largely the same signal. iOS
+# stays compile-only in compat-matrix.yml.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  example-suite:
+    name: example app suite (emulator)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Setup
+        uses: ./.github/actions/setup
+
+      - name: Install JDK
+        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      # Without this the emulator falls back to software rendering and the suite
+      # takes long enough to hit the timeout.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-e2e-${{ hashFiles('example/android/**/*.gradle*', 'android/**/*.gradle*') }}
+          restore-keys: gradle-e2e-
+
+      # The Android SDK is preinstalled on the runner; only the system image and
+      # an AVD are missing. Done inline rather than via a third-party action so
+      # this workflow adds no dependency that would need SHA-pinning.
+      - name: Create AVD
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager --install "system-images;android-34;google_apis;x86_64" >/dev/null
+          echo no | avdmanager create avd -n e2e -k "system-images;android-34;google_apis;x86_64" --force
+
+      - name: Boot emulator
+        run: |
+          set -euo pipefail
+          nohup "$ANDROID_HOME/emulator/emulator" -avd e2e \
+            -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect \
+            -no-snapshot > "$RUNNER_TEMP/emulator.log" 2>&1 &
+          adb wait-for-device
+          # `wait-for-device` returns as soon as adb connects; the system is not
+          # usable until boot actually completes.
+          until [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; do
+            sleep 3
+          done
+          adb shell input keyevent 82 || true
+          adb devices
+
+      # RN_WORKERS_SCREEN is inlined by Babel when METRO transforms the file, so it
+      # must be set on the Metro process — not on the app build (see
+      # example/babel.config.js).
+      - name: Start Metro (tests screen)
+        run: |
+          set -euo pipefail
+          RN_WORKERS_SCREEN=tests nohup yarn example start --reset-cache \
+            > "$RUNNER_TEMP/metro.log" 2>&1 &
+          for _ in $(seq 1 60); do
+            curl -sf http://localhost:8081/status >/dev/null && break
+            sleep 3
+          done
+          curl -sf http://localhost:8081/status || { echo "Metro failed to start"; tail -40 "$RUNNER_TEMP/metro.log"; exit 1; }
+
+      - name: Build, run and assert the suite
+        run: .github/scripts/run-android-e2e.sh
+
+      - name: Collect diagnostics
+        if: failure()
+        run: |
+          mkdir -p "$RUNNER_TEMP/diag"
+          adb logcat -d > "$RUNNER_TEMP/diag/logcat.txt" 2>&1 || true
+          cp "$RUNNER_TEMP/metro.log" "$RUNNER_TEMP/diag/" 2>/dev/null || true
+          cp "$RUNNER_TEMP/emulator.log" "$RUNNER_TEMP/diag/" 2>/dev/null || true
+
+      - name: Upload diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: e2e-android-diagnostics
+          path: ${{ runner.temp }}/diag
+          retention-days: 7

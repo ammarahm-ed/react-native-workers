@@ -10,6 +10,24 @@ name: Compatibility matrix
 # entries pick up brand-new releases automatically, so a breaking drop turns a job
 # red without anyone editing this file.
 #
+# TOOLCHAIN PINNING (why some iOS jobs name an Xcode version)
+# ----------------------------------------------------------
+# iOS has two upstream constraints pointing in OPPOSITE directions, so no single
+# Xcode builds the whole matrix. Neither is caused by this library:
+#
+#   * RN 0.81 / 0.82 need Xcode <= 26.1. Their pinned `fmt` uses `consteval` in a
+#     way newer Clang rejects — errors land in Pods/fmt/format-inl.h, none in our
+#     sources.
+#   * Expo SDK 56+ needs Xcode >= 26.4. `expo-modules-jsi` uses Swift 6.3
+#     `weak let`; older Swift fails with "'weak' must be a mutable variable"
+#     (expo/expo#46242).
+#
+# Running the full range in CI is the point: the runners carry several Xcodes, so
+# each job selects the one its target needs, instead of the whole matrix being
+# hostage to whichever Xcode a laptop happens to have.
+#
+# Keep the version lists in sync with scripts/matrix.mjs (the local twin).
+#
 # Runs weekly (to catch new releases) and on demand. It is intentionally NOT on the
 # PR hot path — it spins up many full native builds.
 
@@ -27,10 +45,21 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Matrix ranges are inlined per job below. Keep them in sync:
-#   RN minors : "0.81".."0.86" (0.81.4 is the floor) + floating "latest"/"next"
-#   Expo SDKs : "54".."57" (SDK 54 is the floor) + floating "latest"
-# The floating entries turn a job red automatically when a breaking version drops.
+env:
+  # ccache is what makes re-runs cheap. The defaults are wrong for this shape of
+  # build, so:
+  #  - the consumer app is scaffolded into a NEW path every run, so absolute paths
+  #    in debug info would miss on every object (hence hash_dir=false)
+  #  - Xcode passes -ivfsoverlay, module maps and timestamped system headers that
+  #    are not semantically meaningful (hence the sloppiness list)
+  #  - depend mode avoids re-running the preprocessor just to decide a hit
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  CCACHE_MAXSIZE: 2G
+  CCACHE_COMPILERCHECK: content
+  CCACHE_DEPEND: 'true'
+  CCACHE_INODECACHE: 'true'
+  CCACHE_SLOPPINESS: clang_index_store,file_stat_matches,include_file_ctime,include_file_mtime,ivfsoverlay,pch_defines,modules,system_headers,time_macros
+  CCACHE_HASHDIR: 'false'
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -75,6 +104,9 @@ jobs:
         rn: ['0.81', '0.82', '0.83', '0.84', '0.85', '0.86', 'latest', 'next']
     name: rn-android (${{ matrix.rn }})
     steps:
+      - name: Checkout (helper scripts)
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
@@ -85,6 +117,20 @@ jobs:
         with:
           distribution: 'zulu'
           java-version: '17'
+
+      - name: Install ccache
+        run: sudo apt-get update && sudo apt-get install -y ccache
+
+      # Keyed per target so versions never evict each other; restore-keys let a new
+      # patch release start warm from the previous run of the same minor.
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-rn-android-${{ matrix.rn }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-rn-android-${{ matrix.rn }}-
+            ccache-rn-android-
 
       - name: Download tarball
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -103,13 +149,18 @@ jobs:
             --version "$RN_VERSION" --pm npm --skip-git-init --install-pods false
           cd RnApp
           npm install "$RUNNER_TEMP/react-native-workers.tgz"
+          "$GITHUB_WORKSPACE/.github/scripts/enable-android-ccache.sh" .
           cd android
           ./gradlew :app:assembleDebug -PreactNativeArchitectures=arm64-v8a --no-daemon --console=plain
 
+      - name: ccache stats
+        if: always()
+        run: ccache -s | head -20
+
   # ---------------------------------------------------------------------------
-  # Expo apps — verifies the Expo-in-worker bridge (companion Swift module on iOS,
-  # the conditional Kotlin `WorkerExpoModules` + fbjni installer on Android)
-  # compiles against each Expo SDK. Pins the SDK via `expo install --fix`.
+  # Expo apps — verifies the Expo-in-worker bridge (companion Swift module + the
+  # SDK 56+ Swift JSI installer on iOS; the reflective Kotlin installer on
+  # Android) compiles against each Expo SDK.
   # ---------------------------------------------------------------------------
   expo-android:
     needs: pack
@@ -120,6 +171,9 @@ jobs:
         sdk: ['54', '55', '56', '57', 'latest']
     name: expo-android (sdk ${{ matrix.sdk }})
     steps:
+      - name: Checkout (helper scripts)
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
@@ -131,6 +185,18 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
+      - name: Install ccache
+        run: sudo apt-get update && sudo apt-get install -y ccache
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-expo-android-${{ matrix.sdk }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-expo-android-${{ matrix.sdk }}-
+            ccache-expo-android-
+
       - name: Download tarball
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -141,39 +207,71 @@ jobs:
         working-directory: ${{ runner.temp }}
         run: |
           set -euo pipefail
-          npx --yes create-expo-app@latest ExpoApp --no-install --yes
+          # Scaffold from the SDK-PINNED template — downgrading a latest-SDK
+          # template instead conflicts on expo-router peers (same reason
+          # scripts/matrix.mjs uses expo-template-blank@sdk-NN).
+          TEMPLATE="expo-template-blank@sdk-${{ matrix.sdk }}"
+          [ "${{ matrix.sdk }}" = "latest" ] && TEMPLATE="expo-template-blank"
+          npx --yes create-expo-app@latest ExpoApp --no-install --yes --template "$TEMPLATE"
           cd ExpoApp
-          # Pin to the target SDK, then let expo align react-native + deps to it.
-          EXPO_RANGE="^${{ matrix.sdk }}.0.0"
-          [ "${{ matrix.sdk }}" = "latest" ] && EXPO_RANGE="latest"
-          npm pkg set "dependencies.expo=$EXPO_RANGE"
-          npm install
+          npm install --legacy-peer-deps
           npx expo install --fix
-          npm install "$RUNNER_TEMP/react-native-workers.tgz"
-          # An Expo module in a worker (compile-only signal for the bridge).
+          npm install "$RUNNER_TEMP/react-native-workers.tgz" --legacy-peer-deps
+          # An Expo module in a worker (compile signal for the bridge).
           npx expo install expo-device expo-crypto
           npx expo prebuild --platform android --no-install
+          "$GITHUB_WORKSPACE/.github/scripts/enable-android-ccache.sh" .
           cd android
           ./gradlew :app:assembleDebug -PreactNativeArchitectures=arm64-v8a --no-daemon --console=plain
 
+      - name: ccache stats
+        if: always()
+        run: ccache -s | head -20
+
   # ---------------------------------------------------------------------------
-  # iOS — leaner (macOS minutes are costly): only the newest RN and the two newest
-  # Expo SDKs. Skipped unless the dispatch input opts in (defaults to on).
+  # iOS — now the FULL range, because each job picks the Xcode its target needs.
   # ---------------------------------------------------------------------------
   react-native-ios:
     needs: pack
     if: github.event_name == 'schedule' || inputs.include-ios
-    runs-on: macos-latest
+    runs-on: macos-15
+    continue-on-error: ${{ matrix.rn == 'next' }}
     strategy:
       fail-fast: false
       matrix:
-        rn: ['0.86', 'latest']
+        rn: ['0.81', '0.82', '0.83', '0.84', '0.85', '0.86', 'latest', 'next']
+        include:
+          # Pinned `fmt` does not compile with newer Clang — see the header note.
+          - rn: '0.81'
+            xcode: '26.1'
+          - rn: '0.82'
+            xcode: '26.1'
     name: rn-ios (${{ matrix.rn }})
     steps:
+      - name: Checkout (helper scripts)
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Select Xcode
+        run: .github/scripts/select-xcode.sh "${{ matrix.xcode }}"
+
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
+
+      - name: Install ccache
+        run: brew list ccache >/dev/null 2>&1 || brew install ccache
+
+      # Keyed by Xcode as well: a compiler change invalidates every object anyway,
+      # so mixing toolchains in one cache only wastes space.
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-rn-ios-${{ matrix.rn }}-${{ matrix.xcode || 'default' }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-rn-ios-${{ matrix.rn }}-${{ matrix.xcode || 'default' }}-
+            ccache-rn-ios-${{ matrix.rn }}-
 
       - name: Download tarball
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -190,25 +288,52 @@ jobs:
             --version "$RN_VERSION" --pm npm --skip-git-init --install-pods false
           cd RnApp
           npm install "$RUNNER_TEMP/react-native-workers.tgz"
-          cd ios && pod install
-          set -o pipefail && xcodebuild -workspace RnApp.xcworkspace -scheme RnApp \
-            -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
-            build CODE_SIGNING_ALLOWED=NO | tail -40
+          "$GITHUB_WORKSPACE/.github/scripts/build-ios.sh" .
+
+      - name: ccache stats
+        if: always()
+        run: ccache -s | head -20
 
   expo-ios:
     needs: pack
     if: github.event_name == 'schedule' || inputs.include-ios
-    runs-on: macos-latest
+    runs-on: macos-15
     strategy:
       fail-fast: false
       matrix:
-        sdk: ['56', '57']
+        sdk: ['54', '55', '56', '57', 'latest']
+        include:
+          # expo-modules-jsi uses Swift 6.3 `weak let` — see the header note.
+          - sdk: '56'
+            xcode: '26.4'
+          - sdk: '57'
+            xcode: '26.4'
+          - sdk: 'latest'
+            xcode: '26.4'
     name: expo-ios (sdk ${{ matrix.sdk }})
     steps:
+      - name: Checkout (helper scripts)
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Select Xcode
+        run: .github/scripts/select-xcode.sh "${{ matrix.xcode }}"
+
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
+
+      - name: Install ccache
+        run: brew list ccache >/dev/null 2>&1 || brew install ccache
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-expo-ios-${{ matrix.sdk }}-${{ matrix.xcode || 'default' }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-expo-ios-${{ matrix.sdk }}-${{ matrix.xcode || 'default' }}-
+            ccache-expo-ios-${{ matrix.sdk }}-
 
       - name: Download tarball
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -220,15 +345,17 @@ jobs:
         working-directory: ${{ runner.temp }}
         run: |
           set -euo pipefail
-          npx --yes create-expo-app@latest ExpoApp --no-install --yes
+          TEMPLATE="expo-template-blank@sdk-${{ matrix.sdk }}"
+          [ "${{ matrix.sdk }}" = "latest" ] && TEMPLATE="expo-template-blank"
+          npx --yes create-expo-app@latest ExpoApp --no-install --yes --template "$TEMPLATE"
           cd ExpoApp
-          npm pkg set "dependencies.expo=^${{ matrix.sdk }}.0.0"
-          npm install
+          npm install --legacy-peer-deps
           npx expo install --fix
-          npm install "$RUNNER_TEMP/react-native-workers.tgz"
+          npm install "$RUNNER_TEMP/react-native-workers.tgz" --legacy-peer-deps
           npx expo install expo-device expo-crypto
           npx expo prebuild --platform ios --no-install
-          cd ios && pod install
-          set -o pipefail && xcodebuild -workspace ExpoApp.xcworkspace -scheme ExpoApp \
-            -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
-            build CODE_SIGNING_ALLOWED=NO | tail -40
+          "$GITHUB_WORKSPACE/.github/scripts/build-ios.sh" .
+
+      - name: ccache stats
+        if: always()
+        run: ccache -s | head -20
