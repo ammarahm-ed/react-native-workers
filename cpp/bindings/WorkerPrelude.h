@@ -428,6 +428,13 @@ constexpr const char* kWorkerPrelude = R"JS(
     this.arrayBuffer = g.__rnworkersOpenSharedBuffer(name, byteLength);
     this.byteLength = this.arrayBuffer.byteLength;
     this._lock = g.__rnworkersOpenSharedLock(name);
+    this.name = name;
+    // What the message codec matches on to pass this buffer BY REFERENCE
+    // (MessageCodec.cpp, TAG_SHAREDBUFFER) instead of copying its bytes.
+    // Non-enumerable so it never shows up in user iteration or JSON.
+    Object.defineProperty(this, '__rnworkersSharedBufferName', {
+      value: name, enumerable: false, writable: false, configurable: false,
+    });
   }
   SharedBuffer.prototype.withLock = function (fn) {
     var r;

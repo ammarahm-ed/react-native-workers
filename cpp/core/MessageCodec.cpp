@@ -26,6 +26,9 @@ enum Tag : uint8_t {
   TAG_DATE = 10,
   TAG_ARRAYBUFFER = 11,
   TAG_TYPEDARRAY = 12,
+  // A SharedBuffer passed BY REFERENCE: only its name travels, and the receiver
+  // reopens the same native allocation. Nothing is copied, at any size.
+  TAG_SHAREDBUFFER = 13,
 };
 
 class VecMutableBuffer : public MutableBuffer {
@@ -111,6 +114,23 @@ void encodeObject(Encoder& e, const Value& v, const Object& obj) {
     if (found.isNumber()) {
       e.byte(TAG_REF);
       e.varuint(static_cast<uint32_t>(found.getNumber()));
+      return;
+    }
+  }
+
+  // A SharedBuffer is already shared memory — copying its bytes into the message
+  // would be pure waste, and would break the primitive's whole point by handing
+  // the receiver a private copy. Send the name; the other side reopens the same
+  // allocation through the process-global registry.
+  {
+    Value marker = obj.getProperty(rt, "__rnworkersSharedBufferName");
+    if (marker.isString()) {
+      e.byte(TAG_SHAREDBUFFER);
+      e.str(marker.getString(rt).utf8(rt));
+      double byteLength = 0;
+      Value len = obj.getProperty(rt, "byteLength");
+      if (len.isNumber()) byteLength = len.getNumber();
+      e.varuint(static_cast<uint32_t>(byteLength));
       return;
     }
   }
@@ -304,6 +324,31 @@ Value decodeValue(Decoder& d) {
       return rt.global()
           .getPropertyAsFunction(rt, ctorName.c_str())
           .callAsConstructor(rt, std::move(ab));
+    }
+    case TAG_SHAREDBUFFER: {
+      std::string name = d.str();
+      uint32_t byteLength = d.varuint();
+      // Rebuild a real SharedBuffer where the constructor exists (worker prelude
+      // and, on the host, the class installed by src/SharedBuffer.native.ts), so
+      // the receiver gets the same API it would have constructing it itself —
+      // including withLock. Both paths open the SAME memory.
+      Value ctor = rt.global().getProperty(rt, "SharedBuffer");
+      if (ctor.isObject() && ctor.asObject(rt).isFunction(rt)) {
+        return ctor.asObject(rt).asFunction(rt).callAsConstructor(
+            rt,
+            String::createFromUtf8(rt, name),
+            Value(static_cast<double>(byteLength)));
+      }
+      // No constructor in this runtime: hand back the shared memory itself
+      // rather than failing the whole message.
+      Value opener = rt.global().getProperty(rt, "__rnworkersOpenSharedBuffer");
+      if (opener.isObject() && opener.asObject(rt).isFunction(rt)) {
+        return opener.asObject(rt).asFunction(rt).call(
+            rt,
+            String::createFromUtf8(rt, name),
+            Value(static_cast<double>(byteLength)));
+      }
+      throw DataCloneError("SharedBuffer is not available in this runtime");
     }
     case TAG_REF: {
       uint32_t id = d.varuint();

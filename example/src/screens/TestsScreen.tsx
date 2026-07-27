@@ -12,6 +12,7 @@ import {
   Worker,
   UIWorker,
   SharedStore,
+  SharedBuffer,
 } from '@ammarahmed/react-native-workers';
 import { runConformance } from '../conformance';
 import { runBridgeTests } from '../bridgeTests';
@@ -820,6 +821,48 @@ export default function TestsScreen() {
             detail: JSON.stringify(nativeQueue),
           });
         }
+
+        // SharedBuffer through postMessage must travel BY REFERENCE: the
+        // receiver gets the same native allocation, not a copy. Proven in both
+        // directions — the worker reads a byte written before sending, and its
+        // own write lands in the buffer the host still holds.
+        const sharedPost = await new Promise<any>((resolve) => {
+          try {
+            const name = `rnworkers-post-${Date.now()}`;
+            const buf = new SharedBuffer(name, 4096);
+            const hostView = new Uint8Array(buf.arrayBuffer);
+            hostView[0] = 42;
+
+            const w = new Worker('../workers/sharedbufferpost');
+            const timer = setTimeout(() => {
+              w.terminate();
+              resolve({ __timeout: true });
+            }, 6000);
+            w.onmessage = (e: any) => {
+              clearTimeout(timer);
+              w.terminate();
+              resolve({ ...e.data, hostSeesWorkerByte: hostView[1] });
+            };
+            w.onerror = (e: any) => {
+              clearTimeout(timer);
+              w.terminate();
+              resolve({ __error: e.message });
+            };
+            w.postMessage({ buffer: buf });
+          } catch (err) {
+            resolve({ __threw: String((err as any)?.message ?? err) });
+          }
+        });
+        all.push({
+          name: 'SharedBuffer posts by reference (no copy)',
+          pass:
+            sharedPost?.ok === true &&
+            sharedPost.sawHostByte === 42 &&
+            sharedPost.hostSeesWorkerByte === 99 &&
+            sharedPost.isSharedBuffer === true &&
+            sharedPost.byteLength === 4096,
+          detail: JSON.stringify(sharedPost),
+        });
 
         // JSModule bridge suite (typed two-way RPC, events, SharedStore params).
         const bridge = await runBridgeTests();

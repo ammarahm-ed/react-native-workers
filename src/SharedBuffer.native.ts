@@ -25,11 +25,24 @@ export class SharedBuffer {
   readonly byteLength: number;
   private readonly _lock: any;
 
+  /** The name this buffer was opened under. */
+  readonly name: string;
+
   constructor(name: string, byteLength: number) {
     ensureInstalled();
     this.arrayBuffer = globalThis.__rnworkersOpenSharedBuffer(name, byteLength);
     this.byteLength = this.arrayBuffer.byteLength;
     this._lock = globalThis.__rnworkersOpenSharedLock(name);
+    this.name = name;
+    // What the message codec matches on to pass this buffer BY REFERENCE
+    // (cpp/core/MessageCodec.cpp, TAG_SHAREDBUFFER) instead of copying its
+    // bytes. Non-enumerable so it never shows up in user iteration or JSON.
+    Object.defineProperty(this, '__rnworkersSharedBufferName', {
+      value: name,
+      enumerable: false,
+      writable: false,
+      configurable: false,
+    });
   }
 
   /** Run `fn` holding this buffer's cross-runtime lock; returns fn's result. */
@@ -55,3 +68,8 @@ export class SharedBuffer {
     return globalThis.__rnworkersDeleteSharedBuffer(name);
   }
 }
+
+// The message codec rebuilds an incoming SharedBuffer through this constructor,
+// so a buffer posted from a worker arrives on the host as a real SharedBuffer —
+// same API, same memory. Workers get theirs from the prelude.
+globalThis.SharedBuffer = globalThis.SharedBuffer ?? SharedBuffer;
