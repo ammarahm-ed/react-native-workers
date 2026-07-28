@@ -29,6 +29,40 @@
 // `@objc`-exposed.
 //
 // Autolinked only in Expo apps, like the rest of ios/*.swift.
+// SDK 56+ made `AppContext._runtime` private and replaced it with a public
+// `setRuntime(_:scheduler:dispatch:)` taking a raw pointer, so the code below
+// cannot compile there — it broke the build outright for SDK 55/56/57 apps, on
+// every RN version, because this class was only ever verified against SDK 54.
+//
+// Those SDKs do not use this class: the ObjC++ side that builds an
+// `EXJavaScriptRuntime` is itself compiled out when the JSI API is Swift-only, and
+// SDK 56+ installs Expo through RNWorkersExpoJSI/WorkerExpoModulesSwiftJSI.mm
+// instead. So keep the `@objc` surface (the ObjC++ lookup is by name and must
+// still resolve) and decline, which is exactly what the caller already handles by
+// falling back to the forwarding installer.
+//
+// Adopting `setRuntime` to give SDK 56+ a real per-worker AppContext is worth
+// doing, but it needs its own device verification per SDK — not a compile fix.
+#if RNWORKERS_EXPO_SWIFT_JSI
+
+import ExpoModulesCore
+
+@objc(RNWorkersExpoWorkerContext)
+public final class RNWorkersExpoWorkerContext: NSObject {
+  @objc(createWithRuntime:)
+  public static func create(runtime: AnyObject) -> RNWorkersExpoWorkerContext? {
+    return nil
+  }
+
+  @objc(hasModules)
+  public var hasModules: Bool { return false }
+
+  @objc(invalidate)
+  public func invalidate() {}
+}
+
+#else
+
 import ExpoModulesCore
 
 @objc(RNWorkersExpoWorkerContext)
@@ -86,3 +120,5 @@ public final class RNWorkersExpoWorkerContext: NSObject {
     appContext._runtime = nil
   }
 }
+
+#endif

@@ -765,8 +765,17 @@ static std::optional<std::function<void()>> installRealExpoWorkerContext(
     NSLog(@"[RNWorkerExpo] EXRuntime class absent on this SDK -> forwarding installer");
     return std::nullopt;
   }
+  // SDK 54 declares `initWithRuntime:(jsi::Runtime *)`; the SDK 55 ExpoModulesJSI
+  // pod rewrote it to take `jsi::Runtime &`. Passing the wrong one is a hard
+  // compile error, so branch on which header supplied the class — the same
+  // detection that chose the import above.
+#ifdef RNWORKERS_EXPO_JSI_IN_JSI_POD
+  EXJavaScriptRuntime *workerRuntime =
+      [[expoRuntimeClass alloc] initWithRuntime:rt callInvoker:invoker];
+#else
   EXJavaScriptRuntime *workerRuntime =
       [[expoRuntimeClass alloc] initWithRuntime:&rt callInvoker:invoker];
+#endif
   if (!workerRuntime) {
     return std::nullopt;
   }
