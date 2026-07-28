@@ -249,6 +249,7 @@ object WorkerTurboModules {
         jsCallInvokerHolder,
         deviceEventSinkId,
         nativeQueueId,
+        runtimeExecutor,
       )
     // The resolver is attached BEFORE the delegate is built, not after.
     //

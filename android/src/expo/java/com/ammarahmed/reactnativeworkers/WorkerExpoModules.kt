@@ -89,6 +89,7 @@ object WorkerExpoModules {
           callInvokerHolder,
           deviceEventSinkId,
           nativeQueueId,
+          runtimeExecutor,
         )
 
       val interop = KotlinInteropModuleRegistry(

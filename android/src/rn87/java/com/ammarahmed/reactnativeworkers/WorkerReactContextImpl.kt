@@ -20,16 +20,18 @@ internal class WorkerReactContextImpl(
   workerCallInvokerHolder: CallInvokerHolder,
   deviceEventSinkId: Long,
   nativeQueueId: Long,
+  workerRuntimeExecutor: RuntimeExecutor?,
 ) : WorkerReactContext(
   host,
   jsRuntimePointer,
   workerCallInvokerHolder,
   deviceEventSinkId,
   nativeQueueId,
+  workerRuntimeExecutor,
 ) {
 
   /**
-   * NOT the host's executor.
+   * THIS worker's executor — never the host's.
    *
    * `getJavaScriptContextHolder()` and `getJSCallInvokerHolder()` are overridden
    * precisely because "ask the context for the runtime and install once" must
@@ -37,17 +39,23 @@ internal class WorkerReactContextImpl(
    * idiom, so delegating it handed a worker module the HOST runtime on the RN JS
    * thread — breaking both isolation rules, silently, only on 0.87+.
    *
-   * Null until the worker's executor is plumbed through from C++
-   * (buildPlatformManager already constructs one). Null is the honest answer: RN
-   * declares this nullable, callers must handle it, and no-executor fails loudly
-   * where wrong-executor corrupts quietly.
+   * The executor is the one C++ builds against this worker's runtime and hands to
+   * its TurboModuleManager, so a module scheduling work through it lands on the
+   * worker's JS thread with the worker's runtime.
+   *
+   * Null after teardown (and for the rare context built without one). Null is the
+   * honest answer there: RN declares this nullable, callers must handle it, and
+   * no-executor fails loudly where wrong-executor corrupts quietly.
    */
   override fun getRuntimeExecutor(): RuntimeExecutor? {
-    android.util.Log.w(
-      "RNWorkerTM",
-      "getRuntimeExecutor() is not yet worker-bound; returning null rather than " +
-        "the host's executor (would install onto the host runtime)",
-    )
-    return null
+    val executor = workerRuntimeExecutorOrNull()
+    if (executor == null) {
+      android.util.Log.w(
+        "RNWorkerTM",
+        "getRuntimeExecutor() on a worker context with no live executor " +
+          "(torn down?); returning null rather than the host's",
+      )
+    }
+    return executor
   }
 }

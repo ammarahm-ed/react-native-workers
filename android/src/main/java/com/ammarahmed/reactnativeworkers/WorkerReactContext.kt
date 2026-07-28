@@ -10,6 +10,7 @@ import com.facebook.react.bridge.Callback
 import com.facebook.react.bridge.LifecycleEventListener
 import com.facebook.react.bridge.NativeModule
 import com.facebook.react.bridge.ReactApplicationContext
+import com.facebook.react.bridge.RuntimeExecutor
 import com.facebook.react.bridge.UIManager
 import com.facebook.react.module.annotations.ReactModule
 import com.facebook.react.common.LifecycleState
@@ -57,9 +58,27 @@ internal abstract class WorkerReactContext(
   private val workerCallInvokerHolder: CallInvokerHolder,
   deviceEventSinkId: Long,
   private val nativeQueueId: Long,
+  workerRuntimeExecutor: RuntimeExecutor?,
 ) : ReactApplicationContext(host) {
 
   private val workerJsContext = JavaScriptContextHolder(jsRuntimePointer)
+
+  /**
+   * This worker's executor — the one built in C++ against this runtime, the same
+   * instance handed to the worker's TurboModuleManager. Held here (rather than
+   * overridden in the 0.87 subclass) because the type exists on every supported
+   * RN; only the `getRuntimeExecutor()` override is version-specific.
+   *
+   * Cleared by [invalidateRuntime]: the executor closes over a raw `jsi::Runtime*`
+   * and dispatches through the worker's CallInvoker, so holding it past teardown
+   * is a use-after-free waiting for a late caller. Read it through
+   * [workerRuntimeExecutorOrNull].
+   */
+  @Volatile
+  private var workerRuntimeExecutor: RuntimeExecutor? = workerRuntimeExecutor
+
+  /** This worker's executor, or null once the worker has been torn down. */
+  protected fun workerRuntimeExecutorOrNull(): RuntimeExecutor? = workerRuntimeExecutor
 
   /** This worker's own device-event target — see [WorkerDeviceEventEmitter]. */
   private val deviceEventEmitter = WorkerDeviceEventEmitter(deviceEventSinkId)
@@ -78,6 +97,7 @@ internal abstract class WorkerReactContext(
   /** Called when the worker is torn down, so late JSI installs cannot use a dead runtime. */
   fun invalidateRuntime() {
     workerJsContext.clear()
+    workerRuntimeExecutor = null
   }
 
   // --- native-modules queue: this worker's, not the host's --------------------
