@@ -6,9 +6,12 @@
 #import <ReactCommon/RCTTurboModule.h>
 #import <React/RCTBridgeModule.h>
 #import <React/RCTBridgeModuleDecorator.h>
+#import <React/RCTBundleAssetImageLoader.h>
 #import <React/RCTDataRequestHandler.h>
 #import <React/RCTFileRequestHandler.h>
+#import <React/RCTGIFImageDecoder.h>
 #import <React/RCTHTTPRequestHandler.h>
+#import <React/RCTImageLoader.h>
 #import <React/RCTNetworking.h> // RCTModuleRegistry is declared in RCTBridgeModule.h
 #import <ReactCommon/TurboModule.h>
 #import <ReactCommon/TurboModuleBinding.h>
@@ -23,40 +26,79 @@
 using facebook::react::CallInvoker;
 using facebook::react::TurboModule;
 
+// --- host-injected module dependencies --------------------------------------
+//
+// Two RN modules cannot be built by `[moduleClass new]`: RCTNetworking and
+// RCTImageLoader both take their dependency lists through initializer-injected
+// provider blocks, falling back to `self.bridge` — and bridgeless has no bridge.
+// The host app never notices because RCTAppSetupUtils injects them on its behalf.
+// A worker that builds them plainly gets EMPTY lists: no URL handlers (every
+// request fails with "No suitable URL request handler found"), no image loaders
+// and no decoders. See `getModuleInstanceFromClass:` below, which mirrors
+// RCTAppSetupUtils for both.
+
+// The autolinked class names for one of the dependency lists.
+//
+// The app's `RCTAppDependencyProvider` is code-generated at install time, so it is
+// reached reflectively (as with `RCTModuleProviders` below) rather than linked
+// against — a worker must work in apps that have no such class at all.
+static NSArray<NSString *> *RNWorkersDependencyClassNames(NSString *selectorName)
+{
+  static NSMutableDictionary<NSString *, NSArray<NSString *> *> *cache = nil;
+  static id provider = nil;
+  static dispatch_once_t onceToken;
+  dispatch_once(&onceToken, ^{
+    cache = [NSMutableDictionary new];
+    Class cls = NSClassFromString(@"RCTAppDependencyProvider");
+    if (cls != Nil) {
+      provider = [cls new];
+    }
+  });
+  @synchronized(cache) {
+    NSArray<NSString *> *cached = cache[selectorName];
+    if (cached != nil) {
+      return cached;
+    }
+    NSArray<NSString *> *names = nil;
+    SEL sel = NSSelectorFromString(selectorName);
+    if (provider != nil && [provider respondsToSelector:sel]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+      names = [provider performSelector:sel];
+#pragma clang diagnostic pop
+    }
+    if (names == nil) {
+      names = @[];
+    }
+    cache[selectorName] = names;
+    return names;
+  }
+}
+
+// The autolinked modules for one dependency list, resolved from THIS WORKER's
+// registry. Non-conforming entries are skipped, as RN does — a name in the
+// generated list is not a guarantee of protocol conformance.
+static NSArray *RNWorkersModulesConformingTo(
+    RCTModuleRegistry *moduleRegistry,
+    NSString *selectorName,
+    Protocol *protocol)
+{
+  NSMutableArray *modules = [NSMutableArray new];
+  for (NSString *className in RNWorkersDependencyClassNames(selectorName)) {
+    id module = [moduleRegistry moduleForName:[className UTF8String]];
+    if (module != nil && [module conformsToProtocol:protocol]) {
+      [modules addObject:module];
+    }
+  }
+  return modules;
+}
+
 // A self-contained delegate. Returning nil from the class-resolution methods
 // makes RCTTurboModuleManager fall back to the process-global RCT_EXPORT_MODULE
 // registry (RCTGetModuleClasses / NSClassFromString), so ANY registered ObjC
 // module resolves by name — no app cooperation required. C++ (Cxx) modules are
 // resolved from the global exported map (incl. this library's own module), and
 // codegen'd modules from the generated RCTModuleProviders table.
-// Class names of URL request handlers contributed by autolinked libraries.
-//
-// The app's `RCTAppDependencyProvider` is code-generated at install time, so it is
-// reached reflectively (as with `RCTModuleProviders` below) rather than linked
-// against — a worker must work in apps that have no such class at all.
-static NSArray<NSString *> *RNWorkersURLRequestHandlerClassNames(void)
-{
-  static NSArray<NSString *> *names = nil;
-  static dispatch_once_t onceToken;
-  dispatch_once(&onceToken, ^{
-    Class cls = NSClassFromString(@"RCTAppDependencyProvider");
-    SEL sel = NSSelectorFromString(@"URLRequestHandlerClassNames");
-    if (cls != Nil) {
-      id provider = [cls new];
-      if ([provider respondsToSelector:sel]) {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-        names = [provider performSelector:sel];
-#pragma clang diagnostic pop
-      }
-    }
-    if (names == nil) {
-      names = @[];
-    }
-  });
-  return names;
-}
-
 @interface RNWorkersTMDelegate : NSObject <RCTTurboModuleManagerDelegate> {
 @public
   std::shared_ptr<CallInvoker> _invoker;
@@ -98,17 +140,10 @@ static NSArray<NSString *> *RNWorkersURLRequestHandlerClassNames(void)
 
 - (id<RCTTurboModule>)getModuleInstanceFromClass:(Class)moduleClass
 {
-  // RCTNetworking is the one module `[moduleClass new]` cannot produce correctly.
-  //
-  // It finds its URL handlers either from an injected handlers-provider or, as a
-  // fallback, from `self.bridge` — and bridgeless has no bridge. The host app
-  // never notices because RCTAppSetupUtils injects the provider for it; a worker
-  // built the module plainly and got an EMPTY handler list, so every request in
-  // a worker died with "No suitable URL request handler found for <url>". XHR and
-  // fetch were simply non-functional inside an iOS worker.
-  //
-  // Mirror RN's own list exactly (RCTAppSetupUtils.mm), resolved from the WORKER's
-  // module registry so the handlers are this worker's instances, not the host's.
+  // The two modules whose dependencies the HOST injects — mirror RN's own lists
+  // (RCTAppSetupUtils.mm), resolved from the WORKER's module registry so every
+  // dependency is this worker's instance rather than the host's. See the note at
+  // the top of this file for why `[moduleClass new]` is wrong for these.
   if (moduleClass == RCTNetworking.class) {
     return [[moduleClass alloc]
         initWithHandlersProvider:^NSArray<id<RCTURLRequestHandler>> *(RCTModuleRegistry *moduleRegistry) {
@@ -121,16 +156,33 @@ static NSArray<NSString *> *RNWorkersURLRequestHandlerClassNames(void)
           if (blobModule != nil) {
             [handlers addObject:(id<RCTURLRequestHandler>)blobModule];
           }
-          // Handlers contributed by autolinked libraries. The generated provider is
-          // reached by name, like the RCTModuleProviders table above, so no app
-          // cooperation is required.
-          for (NSString *className in RNWorkersURLRequestHandlerClassNames()) {
-            id handler = [moduleRegistry moduleForName:[className UTF8String]];
-            if (handler != nil) {
-              [handlers addObject:(id<RCTURLRequestHandler>)handler];
-            }
-          }
+          [handlers addObjectsFromArray:RNWorkersModulesConformingTo(
+                                            moduleRegistry,
+                                            @"URLRequestHandlerClassNames",
+                                            @protocol(RCTURLRequestHandler))];
           return handlers;
+        }];
+  }
+  if (moduleClass == RCTImageLoader.class) {
+    return [[moduleClass alloc]
+        initWithRedirectDelegate:nil
+        loadersProvider:^NSArray<id<RCTImageURLLoader>> *(RCTModuleRegistry *moduleRegistry) {
+          NSMutableArray<id<RCTImageURLLoader>> *loaders =
+              [NSMutableArray arrayWithObject:[RCTBundleAssetImageLoader new]];
+          [loaders addObjectsFromArray:RNWorkersModulesConformingTo(
+                                           moduleRegistry,
+                                           @"imageURLLoaderClassNames",
+                                           @protocol(RCTImageURLLoader))];
+          return loaders;
+        }
+        decodersProvider:^NSArray<id<RCTImageDataDecoder>> *(RCTModuleRegistry *moduleRegistry) {
+          NSMutableArray<id<RCTImageDataDecoder>> *decoders =
+              [NSMutableArray arrayWithObject:[RCTGIFImageDecoder new]];
+          [decoders addObjectsFromArray:RNWorkersModulesConformingTo(
+                                            moduleRegistry,
+                                            @"imageDataDecoderClassNames",
+                                            @protocol(RCTImageDataDecoder))];
+          return decoders;
         }];
   }
   // nil -> RCTTurboModuleManager does [moduleClass new].
@@ -265,9 +317,25 @@ std::function<void(jsi::Runtime &)> installWorkerTurboModules(
         }
       }];
 
+  // Peer module lookup, worker-local.
+  //
+  // `@synthesize moduleRegistry` and `[_moduleRegistry moduleForName:"…"]` is the
+  // bridgeless way for a native module to reach another one, and it is common in
+  // third-party libraries. Passed nil here, every such lookup returned nil inside
+  // a worker and the module silently degraded — RCTImageLoader is the first-party
+  // proof: it asks the registry for "Networking", got nil, and reported "No
+  // suitable image URL loader found … import the RCTNetwork library".
+  //
+  // Point it at THIS worker's TurboModuleManager (which conforms to
+  // RCTTurboModuleRegistry), so a peer resolves to the worker's own instance and
+  // never to the host's — the iOS counterpart of the Android worker-local peer
+  // resolution. The registry holds the manager weakly, and the manager is kept
+  // alive by the teardown callback below.
+  RCTModuleRegistry *moduleRegistry = [RCTModuleRegistry new];
+
   RCTBridgeModuleDecorator *decorator =
       [[RCTBridgeModuleDecorator alloc] initWithViewRegistry:nil
-                                             moduleRegistry:nil
+                                             moduleRegistry:moduleRegistry
                                               bundleManager:nil
                                           callableJSModules:callableJSModules];
 
@@ -291,6 +359,9 @@ std::function<void(jsi::Runtime &)> installWorkerTurboModules(
                                                delegate:delegate
                                               jsInvoker:workerInvoker];
 #endif
+  // Close the cycle: modules built by this manager now resolve their peers through
+  // it. Set after construction because the manager does not exist any earlier.
+  [moduleRegistry setTurboModuleRegistry:manager];
   [manager installJSBindings:rt];
 
   // Cleanup: invalidate on the worker thread WHILE the runtime is still alive, so
