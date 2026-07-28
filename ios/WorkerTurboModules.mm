@@ -6,6 +6,10 @@
 #import <ReactCommon/RCTTurboModule.h>
 #import <React/RCTBridgeModule.h>
 #import <React/RCTBridgeModuleDecorator.h>
+#import <React/RCTDataRequestHandler.h>
+#import <React/RCTFileRequestHandler.h>
+#import <React/RCTHTTPRequestHandler.h>
+#import <React/RCTNetworking.h> // RCTModuleRegistry is declared in RCTBridgeModule.h
 #import <ReactCommon/TurboModule.h>
 #import <ReactCommon/TurboModuleBinding.h>
 
@@ -25,6 +29,34 @@ using facebook::react::TurboModule;
 // module resolves by name — no app cooperation required. C++ (Cxx) modules are
 // resolved from the global exported map (incl. this library's own module), and
 // codegen'd modules from the generated RCTModuleProviders table.
+// Class names of URL request handlers contributed by autolinked libraries.
+//
+// The app's `RCTAppDependencyProvider` is code-generated at install time, so it is
+// reached reflectively (as with `RCTModuleProviders` below) rather than linked
+// against — a worker must work in apps that have no such class at all.
+static NSArray<NSString *> *RNWorkersURLRequestHandlerClassNames(void)
+{
+  static NSArray<NSString *> *names = nil;
+  static dispatch_once_t onceToken;
+  dispatch_once(&onceToken, ^{
+    Class cls = NSClassFromString(@"RCTAppDependencyProvider");
+    SEL sel = NSSelectorFromString(@"URLRequestHandlerClassNames");
+    if (cls != Nil) {
+      id provider = [cls new];
+      if ([provider respondsToSelector:sel]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+        names = [provider performSelector:sel];
+#pragma clang diagnostic pop
+      }
+    }
+    if (names == nil) {
+      names = @[];
+    }
+  });
+  return names;
+}
+
 @interface RNWorkersTMDelegate : NSObject <RCTTurboModuleManagerDelegate> {
 @public
   std::shared_ptr<CallInvoker> _invoker;
@@ -66,6 +98,41 @@ using facebook::react::TurboModule;
 
 - (id<RCTTurboModule>)getModuleInstanceFromClass:(Class)moduleClass
 {
+  // RCTNetworking is the one module `[moduleClass new]` cannot produce correctly.
+  //
+  // It finds its URL handlers either from an injected handlers-provider or, as a
+  // fallback, from `self.bridge` — and bridgeless has no bridge. The host app
+  // never notices because RCTAppSetupUtils injects the provider for it; a worker
+  // built the module plainly and got an EMPTY handler list, so every request in
+  // a worker died with "No suitable URL request handler found for <url>". XHR and
+  // fetch were simply non-functional inside an iOS worker.
+  //
+  // Mirror RN's own list exactly (RCTAppSetupUtils.mm), resolved from the WORKER's
+  // module registry so the handlers are this worker's instances, not the host's.
+  if (moduleClass == RCTNetworking.class) {
+    return [[moduleClass alloc]
+        initWithHandlersProvider:^NSArray<id<RCTURLRequestHandler>> *(RCTModuleRegistry *moduleRegistry) {
+          NSMutableArray<id<RCTURLRequestHandler>> *handlers = [NSMutableArray arrayWithObjects:[RCTHTTPRequestHandler new],
+                                                                                               [RCTDataRequestHandler new],
+                                                                                               [RCTFileRequestHandler new],
+                                                                                               nil];
+          // blob: URLs. Same lookup RN does; nil when the worker denies BlobModule.
+          id blobModule = [moduleRegistry moduleForName:"BlobModule"];
+          if (blobModule != nil) {
+            [handlers addObject:(id<RCTURLRequestHandler>)blobModule];
+          }
+          // Handlers contributed by autolinked libraries. The generated provider is
+          // reached by name, like the RCTModuleProviders table above, so no app
+          // cooperation is required.
+          for (NSString *className in RNWorkersURLRequestHandlerClassNames()) {
+            id handler = [moduleRegistry moduleForName:[className UTF8String]];
+            if (handler != nil) {
+              [handlers addObject:(id<RCTURLRequestHandler>)handler];
+            }
+          }
+          return handlers;
+        }];
+  }
   // nil -> RCTTurboModuleManager does [moduleClass new].
   return nil;
 }
