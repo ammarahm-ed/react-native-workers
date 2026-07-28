@@ -1086,19 +1086,43 @@ export default function TestsScreen() {
               });
               return;
             }
-            // Every networking event RN emits, watched on the HOST.
-            const names = [
-              'didReceiveNetworkResponse',
-              'didReceiveNetworkData',
-              'didCompleteNetworkResponse',
-              'didReceiveNetworkIncrementalData',
-            ];
+            const url = `${origin}/status`;
+            // Counting every networking event on the host is not an isolation
+            // measurement: in dev the host runtime has its own traffic (Metro,
+            // HMR, the log stream), so a bare count is ambient noise and failed
+            // with hostSaw=3 for requests the worker never made.
+            //
+            // Attribute instead. `didReceiveNetworkResponse` carries
+            // (requestId, status, headers, responseURL), so the worker's request
+            // is identifiable by URL, and its follow-up data/completion events by
+            // the id that response introduced. Anything else on the host is
+            // somebody else's request and is reported separately.
+            const leakedIds = new Set<any>();
             let hostSaw = 0;
-            const subs = names.map((n) =>
-              DeviceEventEmitter.addListener(n, () => {
-                hostSaw += 1;
-              })
-            );
+            let hostAmbient = 0;
+            const subs = [
+              DeviceEventEmitter.addListener(
+                'didReceiveNetworkResponse',
+                (requestId: any, _status: any, _headers: any, resURL: any) => {
+                  if (resURL === url) {
+                    leakedIds.add(requestId);
+                    hostSaw += 1;
+                  } else {
+                    hostAmbient += 1;
+                  }
+                }
+              ),
+              ...[
+                'didReceiveNetworkData',
+                'didCompleteNetworkResponse',
+                'didReceiveNetworkIncrementalData',
+              ].map((n) =>
+                DeviceEventEmitter.addListener(n, (requestId: any) => {
+                  if (leakedIds.has(requestId)) hostSaw += 1;
+                  else hostAmbient += 1;
+                })
+              ),
+            ];
 
             const w = new Worker('../workers/netisolation', {
               nativeModules: true,
@@ -1106,12 +1130,12 @@ export default function TestsScreen() {
             const finish = (data: any) => {
               subs.forEach((sub) => sub.remove());
               w.terminate();
-              resolve({ ...data, hostSaw });
+              resolve({ ...data, hostSaw, hostAmbient });
             };
             const timer = setTimeout(() => finish({ __timeout: true }), 10000);
             w.onmessage = (e: any) => {
               if (e.data?.phase === 'ready') {
-                w.postMessage({ url: `${origin}/status` });
+                w.postMessage({ url });
                 return;
               }
               clearTimeout(timer);
@@ -1133,7 +1157,9 @@ export default function TestsScreen() {
             eventIsolation?.ok === true &&
             // the worker really did the network round trip...
             eventIsolation.status === 200 &&
-            // ...and not one of its events was dispatched on the host runtime
+            // ...and not one of ITS events was dispatched on the host runtime
+            // (`hostAmbient` is the host's own dev-server traffic — reported for
+            // context, never asserted on)
             eventIsolation.hostSaw === 0,
           detail: JSON.stringify(eventIsolation),
         });
