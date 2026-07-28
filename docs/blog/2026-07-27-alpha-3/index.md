@@ -168,7 +168,7 @@ the worker's networking setup both land at that stage.
 Public correction is a gift, and this one was delivered generously — with a list of
 things worth praising alongside the things that were wrong, and an offer to
 collaborate rather than compete. The comparison page has been
-[rewritten](/docs/prior-art#what-the-worklets-team-corrected-us-on) to say what's
+[rewritten](/docs/prior-art#what-the-worklets-team-corrected-me-on) to say what's
 actually true, including the parts where Worklets is ahead.
 
 If you find another claim of mine that doesn't hold, please open an issue. I'd

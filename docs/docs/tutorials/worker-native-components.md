@@ -58,7 +58,7 @@ declares its props. Normally you write that in Objective-C and run codegen.
 
 But a [`UIWorker`](../guides/ui-worker) runs JS **on the main thread**, and
 [`@nativescript/react-native`](../examples) exposes the whole Obj-C runtime to that
-JS. So from worker JavaScript we can do everything the native manager would:
+JS. So from worker JavaScript you can do everything the native manager would:
 
 1. **build** the `UIView` (`UISwitch.alloc().init…`),
 2. **subclass** `RCTViewManager` and **register** it with React Native,
@@ -220,9 +220,10 @@ inherits (`backgroundColor`, `opacity`, …) keep working the native way.
 ## Step 5: events go up natively too
 
 Events flow through React Native's **own** event pipeline — no bridge. RN hands the
-view a native dispatching block through a `set<Event>:` setter; we capture that block
-and, when the control fires, invoke it. The one wrinkle: NativeScript can't *call* a
-runtime-supplied native block directly, so we let the Obj-C runtime do it. The helper
+view a native dispatching block through a `set<Event>:` setter; the helper captures
+that block and, when the control fires, invokes it. The one wrinkle: NativeScript
+can't *call* a runtime-supplied native block directly, so it lets the Obj-C runtime
+do it. The helper
 handles this — components just declare `static events` and call `this.emit()`:
 
 ```ts

@@ -236,7 +236,7 @@ opt-in per worker rather than on by default.
 
 These guarantees also rest on private React Native internals that move between
 versions. [Hacks & compatibility seams](/docs/compat-seams) lists exactly which
-ones and what would let us stop depending on them.
+ones and what would let me stop depending on them.
 :::
 
 ## How it works (short version)

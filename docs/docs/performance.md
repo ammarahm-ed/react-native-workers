@@ -43,7 +43,7 @@ columns above differ by ~4×, on the same laptop.
 ### Cross-thread delivery
 
 Worker→worker messaging never touches the platform: a nested worker gets its own
-module instance and hands off through a plain mutex + condition variable on our
+module instance and hands off through a plain mutex + condition variable on its
 own thread.
 
 Worker→**host** is the one hop that used to differ, because the host JS thread is

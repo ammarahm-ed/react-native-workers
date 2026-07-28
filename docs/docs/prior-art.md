@@ -11,28 +11,28 @@ Native's single JS thread is a problem the community has been chipping away at
 for nearly a decade, and this library owes a real debt to the projects that came
 before it — Software Mansion's worklets work in particular reshaped what people
 believe is possible in React Native. This page explains where each project sits,
-what it is genuinely best at, and why we think a Web Worker–shaped library still
+what it is genuinely best at, and why I think a Web Worker–shaped library still
 deserves a place alongside them.
 
 Everything below is based on reading the actual source of each library
 (`react-native-worklets` 0.11.3, `react-native-worklets-core` 1.6.3,
 `@react-native-runtimes/core` 0.1.0-alpha.0, plus the historical
 `react-native-threads` and `react-native-multithreading`), not just their
-READMEs. These projects move fast — if we've misrepresented anything, or if a
-row has gone stale, please open an issue; we'd rather be corrected than
+READMEs. These projects move fast — if I've misrepresented anything, or if a
+row has gone stale, please open an issue; I'd rather be corrected than
 flattering.
 
 :::note[Corrected after feedback from the Worklets team]
 Tomasz Żeliszewski of Software Mansion [went through an earlier version of this
 page in detail](https://x.com/tjzeldev/status/2081673853831430226) and corrected
-several things we had wrong — about worklet runtimes having event loops and timers
+several things I had wrong — about worklet runtimes having event loops and timers
 from the start, about Bundle Mode's import story, about worklet runtimes already
 being movable between threads, and, most importantly, about native modules inside
-a worker not being as isolated as we implied.
+a worker not being as isolated as I implied.
 
 He was right, and the page has been rewritten accordingly. The native-module point
 was the substantive one and it took real work to fix rather than reword —
-[what changed is written up below](#what-the-worklets-team-corrected-us-on). We're
+[what changed is written up below](#what-the-worklets-team-corrected-me-on). I'm
 grateful for the review; it made the library better, not just the page.
 :::
 
@@ -67,7 +67,7 @@ point is the right one for somebody.
 | npm imports in the other thread | ✅ Normal ES imports, resolved at bundle time | ⚠️ Not in the default (eval) mode; **Bundle Mode** enables it and now ships its own Metro wrapper (`react-native-worklets/bundleMode`) instead of hand-patched Metro — still opt-in | ❌ Only closure-captured values + injected globals | ✅ Same bundle, whole module graph present |
 | Timers inside | `setTimeout`/`setInterval`/`setImmediate`/`queueMicrotask` + microtask loop | Same — an event loop and timers are there from the start, and a runtime can be created *without* them when the host provides its own cadence | `setImmediate` only (no `setTimeout`/`setInterval`) | Full RN environment |
 | `fetch`/network inside | Via the worker's bundle (standard Metro shim provides `XMLHttpRequest`/`Blob`/`FormData`), running off the RN JS thread | Bundle Mode ships a `fetch` written from scratch that runs truly off the JS thread (behind a feature flag) | ❌ | ✅ |
-| Native modules inside | ✅ C++ TurboModules by default; platform (Java/ObjC) modules opt-in per worker, with events and method bodies staying on the worker — [see the isolation rules](#what-the-worklets-team-corrected-us-on) | ❌ (not the goal) | ❌ (host objects can be injected per-context via `addDecorator`) | ✅ It's a real RN instance: iOS resolves through the app's RN delegate; on Android you hand it a package provider once (`setMainReactPackagesProvider` for the app's full set, `setExtraReactPackagesProvider` for extras) |
+| Native modules inside | ✅ C++ TurboModules by default; platform (Java/ObjC) modules opt-in per worker, with events and method bodies staying on the worker — [see the isolation rules](#what-the-worklets-team-corrected-me-on) | ❌ (not the goal) | ❌ (host objects can be injected per-context via `addDecorator`) | ✅ It's a real RN instance: iOS resolves through the app's RN delegate; on Android you hand it a package provider once (`setMainReactPackagesProvider` for the app's full set, `setExtraReactPackagesProvider` for extras) |
 | Expo modules inside | ✅ `requireNativeModule(...)` works in a worker on both platforms (functions, events, live properties) | ❌ | ❌ | ⚠️ Not documented; would follow from the runtime's package set |
 | Data passing | Structured clone (binary codec): cycles, `Date`, `Map`, `Set`, `RegExp`, `Error`, `BigInt`, `ArrayBuffer`, TypedArrays; `DataCloneError` on functions | `createSerializable`: very broad (Map, Set, RegExp, Error, functions-as-remotes, TypedArrays); cycles throw; captured objects frozen in dev | JSI wrappers; primitives copied, arrays/objects as C++ proxies | JSON only: `Date`/`Map`/`Set` → `{}`, cycles throw |
 | Zero-copy binary handoff | ✅ Transfer list moves the backing store (`createTransferableBuffer` for a no-copy-ever buffer) — but Hermes has no real detach, so [the neutering is simulated](/docs/compat-seams#simulated-arraybuffer-transfer) | Postponed — transferable `ArrayBuffer`s ran into threading/GC issues in Hermes | ❌ | ❌ (JSON boundary) |
@@ -100,7 +100,7 @@ once JSI, Hermes, and the New Architecture made it possible to do properly:
 same standard API, but real threads in one process, structured clone instead of
 strings, and native modules that work.
 
-## What the Worklets team corrected us on
+## What the Worklets team corrected me on
 
 This section exists because an earlier version of this page overclaimed, and the
 correction was worth more than the claim.
@@ -117,7 +117,7 @@ assuming one runtime on one thread.
 raised on the host runtime and copied out to interested workers, so a worker's
 network response really did depend on the host JS thread being free.
 
-We treated it as a bug report. Two rules are now enforced, and the second is the
+I treated it as a bug report. Two rules are now enforced, and the second is the
 one that objection is about:
 
 1. A worker runtime never blocks the host runtime or the RN JS thread.
@@ -149,7 +149,7 @@ that **none** of that request's events were dispatched on the host runtime.
   own instance where the module's design allows, but a module holding process-wide
   mutable state without a lock is still a hazard. Platform modules are therefore
   opt-in per worker (`{ nativeModules: true }`), not on by default.
-- **We deny some modules outright** rather than pretend — the UI manager and its
+- **I deny some modules outright** rather than pretend — the UI manager and its
   neighbours are never constructed inside a worker.
 - **Everything above is version-sensitive**, and the seams that keep it working
   across RN and Expo versions are listed in
@@ -159,14 +159,14 @@ that **none** of that request's events were dispatched on the host runtime.
 
 - **Worklet runtimes are not bare.** They have an event loop and timers from the
   start, and can be created deliberately *without* them when the host supplies its
-  own cadence (as `react-native-audio-api` does). Our earlier "no imports, no
-  `fetch`, not even `setTimeout`" described `worklets-core`, and we let it colour
+  own cadence (as `react-native-audio-api` does). My earlier "no imports, no
+  `fetch`, not even `setTimeout`" described `worklets-core`, and I let it colour
   the description of `react-native-worklets` too. Corrected in the table above.
 - **Bundle Mode imports any library**, and its `fetch` is written from scratch
-  specifically so it runs off the JS thread — the same problem we were solving,
-  solved independently and, at the time, more honestly than we had.
+  specifically so it runs off the JS thread — the same problem I was solving,
+  solved independently and, at the time, more honestly than I had.
 - **Worklet runtimes already move between threads** through the C++ API; Reanimated
-  has done it with the UI runtime for years. Our `Thread` is a JS-level API for
+  has done it with the UI runtime for years. My `Thread` is a JS-level API for
   that idea, not the idea itself.
 - **A worklet on a dedicated runtime is close to a Web Worker already** — minus the
   `postMessage`/`onmessage` surface. That is a fair characterisation and the table
@@ -176,14 +176,14 @@ that **none** of that request's events were dispatched on the host runtime.
 
 Tomasz ended by suggesting the two projects could integrate rather than compete —
 Worklets providing battle-tested low-level abstractions, Workers providing the
-familiar high-level API. We think that's the right read, and the section below on
+familiar high-level API. I think that's the right read, and the section below on
 [building other models on top](#flexible-enough-to-build-the-others-on-top) was
 written before the exchange with exactly that shape in mind. The door is open, and
-we'd rather build on their work than around it.
+I'd rather build on their work than around it.
 
 ## Where the others are genuinely better
 
-We want this page to be trustworthy, so let's start with the cases where you
+I want this page to be trustworthy, so let's start with the cases where you
 should *not* pick this library.
 
 - **Animations and gestures: use Reanimated / `react-native-worklets`.**
@@ -200,7 +200,7 @@ should *not* pick this library.
   capability and nothing else on this page does it. If your problem is "this
   chat list monopolizes my JS thread and I want it on another one, UI and all,"
   that is the tool shaped like your problem. It also gets native modules for
-  free in a way we have to work for: a secondary runtime is a real RN instance,
+  free in a way I have to work for: a secondary runtime is a real RN instance,
   so on iOS it resolves modules through the app's own delegate and on Android
   you hand it a package provider once.
 
@@ -229,7 +229,7 @@ real rules: worklets can't call un-workletized functions, captured objects are
 frozen in dev, cyclic captures throw, and the allow-list of usable globals is
 finite. These are reasonable engineering trade-offs for their goals — but they
 are things you have to *know*, and the error messages become part of your
-onboarding. Our Babel plugin, by contrast, does one mechanical thing: it turns
+onboarding. My Babel plugin, by contrast, does one mechanical thing: it turns
 `new Worker('./path')` into a reference to a separately-bundled file.
 
 ### Your worker is a real JavaScript environment
@@ -249,9 +249,9 @@ A worklet runtime is not bare — it has an event loop and timers from the start
 and Bundle Mode lets you import any library into one, with a `fetch` written from
 scratch so that requests run genuinely off the JS thread. The difference is where
 each project starts: Bundle Mode is opt-in on top of a model whose default unit is
-a stringified function plus its closure, and we started from full-environment-first
+a stringified function plus its closure, and I started from full-environment-first
 because "run my existing parsing/crypto/database code on another thread" was the
-problem we cared about. (`worklets-core` is the genuinely minimal one: no
+problem I cared about. (`worklets-core` is the genuinely minimal one: no
 `setTimeout`, no imports, closure-captured values and injected globals only.)
 
 `react-native-runtimes` also gives you a full environment — the fullest
@@ -347,10 +347,10 @@ a `UIWorker` or background worker and reproduce `scheduleOnUI` /
 *to* the UI thread, a worker can take its runtime there for the duration of a
 callback. What you could *not* reproduce without new native work is Software
 Mansion's synchronous call machinery (`runOnUISync`) or Reanimated's renderer
-integration — we'd rather be honest that those remain their moat.
+integration — I'd rather be honest that those remain their moat.
 
 **A runtimes-style business layer** maps even more directly. Strip
-`react-native-runtimes` of its (excellent, and out of scope for us) Fabric
+`react-native-runtimes` of its (excellent, and out of scope for me) Fabric
 surface hosting, and its remaining surface — `prewarmBusinessRuntime`, headless
 tasks, `runtimeFunction`, the shared store — corresponds one-to-one to
 long-lived named workers, `postMessage`, `defineModule`, and `SharedStore`,
@@ -369,7 +369,7 @@ case, and a foundation when you need to build something more opinionated.
 
 ## Honest limitations
 
-Symmetry demands we list our own caveats as plainly as everyone else's:
+Symmetry demands I list my own caveats as plainly as everyone else's:
 
 - This is an **alpha**. The surface is feature-complete for its scope and
   exercised by a compat matrix that rebuilds the library against every supported
@@ -377,7 +377,7 @@ Symmetry demands we list our own caveats as plainly as everyone else's:
   the way Reanimated's runtime has.
 - **Transfer is simulated, not enforced by the engine.** The transfer list really
   does move the backing store, but Hermes has no `ArrayBuffer` detach, so a
-  transferred buffer is only neutered by *our* bookkeeping: the message path
+  transferred buffer is only neutered by the library's own bookkeeping: the message path
   refuses to reuse it and `.detached` reports `true`, while raw reads still
   succeed unless you opt into `enableTransferGuard()`. `SharedArrayBuffer` does not
   exist in Hermes; `SharedBuffer` is the supported shared-memory path. The full
@@ -386,7 +386,7 @@ Symmetry demands we list our own caveats as plainly as everyone else's:
   tested on both platforms, but it rests on version-sensitive seams (a reflective
   event-emitter proxy, a worker-local `ReactContext`, hand-built `RCTNetworking`
   and `RCTImageLoader`). A future RN version can move one of those; the compat
-  matrix is how we find out.
+  matrix is how I find out.
 - **Expo modules on iOS SDK 56+ still use the forwarding installer**, so those
   module objects live on the main runtime. Android builds a real per-worker
   `AppContext` on every SDK.

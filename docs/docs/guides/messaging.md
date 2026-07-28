@@ -74,7 +74,7 @@ Hermes constraint rather than a choice:
 
 `createTransferableBuffer(n)` is a global in every runtime (host and worker) and
 returns an ordinary `ArrayBuffer` — the only difference is that its backing store
-is one Hermes will let us move. Hermes only surrenders the store of an *external*
+is one Hermes will let me move. Hermes only surrenders the store of an *external*
 buffer, so a plain `new ArrayBuffer` has to be copied once before it becomes
 transferable.
 

@@ -11,18 +11,18 @@ written on the assumption that there is exactly one. Most of what follows exists
 because of that single mismatch.
 
 None of it is hidden in the source, so it should not be hidden here either. Each
-entry says **what** we do, **why** it is necessary, **what it costs you**, and
-**what upstream change would let us delete it**. If you maintain React Native,
+entry says **what** I do, **why** it is necessary, **what it costs you**, and
+**what upstream change would let me delete it**. If you maintain React Native,
 Hermes, or Expo, the last line of each section is the ask.
 
 Nothing here is a complaint. These are all reasonable designs for the
-single-runtime case that we happen to be standing outside of.
+single-runtime case that I happen to be standing outside of.
 
 ---
 
 ## Simulated `ArrayBuffer` transfer
 
-**What we do.** `postMessage(value, [buffer])` moves the buffer's backing store
+**What I do.** `postMessage(value, [buffer])` moves the buffer's backing store
 instead of copying it. Afterwards the library records the buffer as transferred in
 a side table, refuses to clone or re-transfer it, and reports `buffer.detached ===
 true` through a getter composed with the engine's own. The optional
@@ -31,9 +31,9 @@ true` through a getter composed with the engine's own. The optional
 throw.
 
 **Why.** JSI has no detach API, and Hermes does not export `JSArrayBuffer::detach`
-— we checked the dynamic symbol table, it is one of roughly 302 exported symbols
+— I checked the dynamic symbol table, it is one of roughly 302 exported symbols
 and detach is not among them. ES2024's `ArrayBuffer.prototype.transfer` is not
-implemented in Hermes either. So the buffer cannot actually be neutered; we can
+implemented in Hermes either. So the buffer cannot actually be neutered; I can
 only refuse to participate in its reuse.
 
 **What it costs you.** Use-after-transfer is a data race rather than a thrown
@@ -48,7 +48,7 @@ getter and the entire guard delete themselves.
 
 ## `createTransferableBuffer`
 
-**What we do.** Provide a global that returns an `ArrayBuffer` backed by a store we
+**What I do.** Provide a global that returns an `ArrayBuffer` backed by a store I
 own, and document that transferring one of those is zero-copy while transferring a
 plain `new ArrayBuffer(n)` copies once.
 
@@ -62,12 +62,12 @@ do with it.
 
 **What would remove it.** Hermes exposing the store of internal `ArrayBuffer`s, or
 `jsi::Runtime::tryGetMutableBuffer` succeeding for them. (`tryGetMutableBuffer`
-exists from RN 0.86; on 0.81–0.85 we detect it with a template probe, which is why
+exists from RN 0.86; on 0.81–0.85 I detect it with a template probe, which is why
 the codec is templated on the runtime type at all.)
 
 ## A per-worker device-event emitter (Android)
 
-**What we do.** `WorkerReactContext.getJSModule()` returns a `java.lang.reflect.Proxy`
+**What I do.** `WorkerReactContext.getJSModule()` returns a `java.lang.reflect.Proxy`
 implementing whichever `RCTDeviceEventEmitter` interface the caller asked for,
 matched **by simple name**, and marshals the event straight into the worker's own
 `global.__rctDeviceEventEmitter`.
@@ -91,7 +91,7 @@ between packages — or, better, `ReactContext` exposing an overridable hook for
 
 ## A worker-local `ReactContext` (Android)
 
-**What we do.** Every worker gets a `WorkerReactContext` that reports **that
+**What I do.** Every worker gets a `WorkerReactContext` that reports **that
 worker's** `javaScriptContextHolder`, `jsCallInvokerHolder`, `runtimeExecutor`, JS
 queue, native-modules queue, and peer modules — delegating everything else to the
 host context.
@@ -111,7 +111,7 @@ registry and queue configuration scoped per runtime rather than per app.
 
 ## Version-selected Kotlin source sets
 
-**What we do.** `WorkerReactContext` is abstract; the concrete subclass lives in
+**What I do.** `WorkerReactContext` is abstract; the concrete subclass lives in
 either `src/rn87/java` or `src/rnLegacy/java`, and `build.gradle` picks one by
 resolving the consumer's React Native version.
 
@@ -119,7 +119,7 @@ resolving the consumer's React Native version.
 that overrides it fails to compile on 0.81–0.86; one that doesn't fails to compile
 on 0.87.
 
-**What it costs you.** Nothing at runtime. It costs *us* a build-time version probe
+**What it costs you.** Nothing at runtime. It costs *me* a build-time version probe
 that silently defaults to the legacy variant if it can't resolve a version.
 
 **What would remove it.** New members on `ReactContext` arriving with a default
@@ -127,17 +127,17 @@ implementation rather than as `abstract`.
 
 ## Reflection into Expo's installer
 
-**What we do.** On Android, `installJsiForWorkerRuntime()` tries SDK 57's
+**What I do.** On Android, `installJsiForWorkerRuntime()` tries SDK 57's
 `MainRuntimeInstaller(runtime).install(ptr, executor)`, falls back to SDK 54–56's
 `JSIContext().installJSIForBridgeless(...)`, and **no-ops gracefully** on an
-unknown future API. On iOS we allocate Expo's runtime class by name
+unknown future API. On iOS I allocate Expo's runtime class by name
 (`NSClassFromString("EXRuntime")`) because `ExpoRuntime` is a `final` Swift class
 with no ObjC header.
 
 **Why.** Expo has moved its JSI surface twice since SDK 54, and none of these are
 public API for "install into a runtime that isn't the app's main one".
 
-**What it costs you.** On an SDK we haven't seen, `global.expo` is absent in the
+**What it costs you.** On an SDK I haven't seen, `global.expo` is absent in the
 worker and the build stays green — a silent degrade, logged but not fatal. That
 trade is deliberate: the alternative is refusing to compile against a newer Expo.
 
@@ -156,7 +156,7 @@ on every SDK.
 
 ## Hand-building `RCTNetworking` and `RCTImageLoader` (iOS)
 
-**What we do.** The worker's TurboModule delegate special-cases exactly these two
+**What I do.** The worker's TurboModule delegate special-cases exactly these two
 classes and constructs them with the same dependency-provider blocks
 `RCTAppSetupUtils` uses, resolved from the *worker's* module registry.
 
@@ -168,7 +168,7 @@ inside an iOS worker failed with *"No suitable URL request handler found"* until
 recently.
 
 **What it costs you.** A copy of RN's list that has to be kept in step with it. If
-RN adds a third such module, a worker gets a broken instance of it and we find out
+RN adds a third such module, a worker gets a broken instance of it and I find out
 from a bug report.
 
 **What would remove it.** RN exposing the setup path as public API — the
@@ -178,15 +178,15 @@ themselves.
 
 ## Linker-retention anchors
 
-**What we do.** Installers that would otherwise be reached only through a
+**What I do.** Installers that would otherwise be reached only through a
 `+load`/`__attribute__((constructor))` are called explicitly from a symbol that is
 always referenced.
 
 **Why.** A static archive drops object files nothing references, taking their
-constructors with them. We shipped this bug twice: an autorelease-pool fix that
+constructors with them. I shipped this bug twice: an autorelease-pool fix that
 linked out and let the same crash return byte-for-byte identical.
 
-**What it costs you.** Nothing, once it works. It cost us two debugging cycles,
+**What it costs you.** Nothing, once it works. It cost me two debugging cycles,
 because a green build says nothing about whether your code is in the binary.
 
 **What would remove it.** Nothing upstream — this is how static linking works. It
@@ -194,20 +194,20 @@ is here so the pattern is recognisable if you see a similar file.
 
 ## Worker module denylist
 
-**What we do.** Certain modules are never constructed inside a worker (the UI
+**What I do.** Certain modules are never constructed inside a worker (the UI
 manager and friends), and `getFabricUIManager()` returns `null` there.
 
 **Why.** A worker is headless by design and those modules assume the main runtime
 and the RN JS thread.
 
 **What it costs you.** A `getEnforcing()` for one of them fails inside a worker
-rather than returning something subtly broken. We think loud is right here.
+rather than returning something subtly broken. I think loud is right here.
 
 **What would remove it.** Nothing — this one is intentional and will stay.
 
 ## Test-harness only: the `fmt` patch
 
-**What we do.** The compatibility matrix rewrites `FMT_CONSTEVAL` in the *scaffolded
+**What I do.** The compatibility matrix rewrites `FMT_CONSTEVAL` in the *scaffolded
 test app's* fmt headers when building RN 0.81/0.82 on iOS.
 
 **Why.** Those versions vendor an fmt whose format-string check is `consteval`,
@@ -220,7 +220,7 @@ unverified on iOS.
 versions you still need Xcode ≤ 26.1.
 
 **What would remove it.** RN 0.81/0.82 backporting a newer fmt, which is unlikely
-for versions that old. Realistically this disappears when those versions leave our
+for versions that old. Realistically this disappears when those versions leave my
 support range.
 
 ---
