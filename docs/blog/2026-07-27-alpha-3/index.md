@@ -31,11 +31,10 @@ either, because nothing ever asked them to be.
 
 That was an accurate description of what the library did.
 
-Rather than reword the page, I wrote down two rules and made them true:
-
-1. **A worker runtime never blocks the host runtime or the RN JS thread.**
-2. **A worker's native modules stay on that worker** — its own event system, its
-   own module instances, no contamination of the main thread.
+The easy response would have been to soften the wording on the comparison page. What
+I actually wanted was for a worker not to depend on the RN JS thread at all, and for
+a worker's native modules — their events, their instances — to stay on that worker.
+That turned out to be a different fix on each platform.
 
 ## What changed on Android
 
@@ -79,8 +78,9 @@ it was quietly breaking more than images.
 ## The claim is now a test, not a sentence
 
 The lesson I keep re-learning is that a verified claim and a verified *belief* look
-identical until something forces the difference. So the isolation rules are asserted
-by tests that would fail if I regressed them:
+identical until something forces the difference. The old claim was a sentence on a
+docs page; there was nothing that would have told me it stopped being true. So this
+time it's covered by tests that fail if I break it:
 
 - one pins the host JS thread in a busy loop and requires a worker's HTTP request to
   complete anyway;
