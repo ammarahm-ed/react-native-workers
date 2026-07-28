@@ -16,7 +16,7 @@ Install the [Babel plugin](./bundling), then reference the file by relative path
 ```js title="src/workers/resize.js"
 self.onmessage = (e) => {
   const resized = resize(e.data.bytes, e.data.width);
-  self.postMessage(resized, [resized.buffer]); // transfer list — a throughput hint
+  self.postMessage(resized, [resized.buffer]); // transfer list — hands the buffer off
 };
 ```
 

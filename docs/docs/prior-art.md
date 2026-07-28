@@ -22,6 +22,20 @@ READMEs. These projects move fast — if we've misrepresented anything, or if a
 row has gone stale, please open an issue; we'd rather be corrected than
 flattering.
 
+:::note[Corrected after feedback from the Worklets team]
+Tomasz Żeliszewski of Software Mansion [went through an earlier version of this
+page in detail](https://x.com/tjzeldev/status/2081673853831430226) and corrected
+several things we had wrong — about worklet runtimes having event loops and timers
+from the start, about Bundle Mode's import story, about worklet runtimes already
+being movable between threads, and, most importantly, about native modules inside
+a worker not being as isolated as we implied.
+
+He was right, and the page has been rewritten accordingly. The native-module point
+was the substantive one and it took real work to fix rather than reword —
+[what changed is written up below](#what-the-worklets-team-corrected-us-on). We're
+grateful for the review; it made the library better, not just the page.
+:::
+
 ## The landscape at a glance
 
 Three mental models exist today for multithreaded JavaScript in React Native:
@@ -51,15 +65,16 @@ point is the right one for somebody.
 | API shape | Web Worker standard: `new Worker()`, `postMessage`, `onmessage`, `self`, `terminate` | Custom: `scheduleOnUI`, `createWorkletRuntime`, `scheduleOnRuntime`, `scheduleOnRN` | Custom: `Worklets.createContext`, `context.runAsync`, `runOnJS` | Custom: `<OnRuntime>`, `ThreadedRuntime.prewarm`, `runtimeFunction`, headless tasks |
 | Babel plugin | One line, only rewrites `new Worker('./path')` to a bundle reference | Required; transforms every worklet function, closure capture rules apply | Required; same, plus auto-workletization config | Required Metro transformer + Babel plugin; generates entry files, rewrites `OnRuntime` children and directive-marked functions |
 | npm imports in the other thread | ✅ Normal ES imports, resolved at bundle time | ⚠️ Not in the default (eval) mode; **Bundle Mode** enables it and now ships its own Metro wrapper (`react-native-worklets/bundleMode`) instead of hand-patched Metro — still opt-in | ❌ Only closure-captured values + injected globals | ✅ Same bundle, whole module graph present |
-| Timers inside | `setTimeout`/`setInterval`/`setImmediate`/`queueMicrotask` + microtask loop | Timers + `requestAnimationFrame` installed when the runtime's event loop is enabled | `setImmediate` only (no `setTimeout`/`setInterval`) | Full RN environment |
-| `fetch`/network inside | Via the worker's bundle (standard Metro shim provides `XMLHttpRequest`/`Blob`/`FormData`) | Bundle Mode only — it injects RN's C++ `NetworkingModule` and runs RN's own `setUpXHR` | ❌ | ✅ |
-| Native modules inside | ✅ C++ TurboModules by default; platform (Java/ObjC) modules opt-in per worker; events delivered to workers | ❌ (not the goal) | ❌ (host objects can be injected per-context via `addDecorator`) | ✅ It's a real RN instance: iOS resolves through the app's RN delegate; on Android you hand it a package provider once (`setMainReactPackagesProvider` for the app's full set, `setExtraReactPackagesProvider` for extras) |
+| Timers inside | `setTimeout`/`setInterval`/`setImmediate`/`queueMicrotask` + microtask loop | Same — an event loop and timers are there from the start, and a runtime can be created *without* them when the host provides its own cadence | `setImmediate` only (no `setTimeout`/`setInterval`) | Full RN environment |
+| `fetch`/network inside | Via the worker's bundle (standard Metro shim provides `XMLHttpRequest`/`Blob`/`FormData`), running off the RN JS thread | Bundle Mode ships a `fetch` written from scratch that runs truly off the JS thread (behind a feature flag) | ❌ | ✅ |
+| Native modules inside | ✅ C++ TurboModules by default; platform (Java/ObjC) modules opt-in per worker, with events and method bodies staying on the worker — [see the isolation rules](#what-the-worklets-team-corrected-us-on) | ❌ (not the goal) | ❌ (host objects can be injected per-context via `addDecorator`) | ✅ It's a real RN instance: iOS resolves through the app's RN delegate; on Android you hand it a package provider once (`setMainReactPackagesProvider` for the app's full set, `setExtraReactPackagesProvider` for extras) |
 | Expo modules inside | ✅ `requireNativeModule(...)` works in a worker on both platforms (functions, events, live properties) | ❌ | ❌ | ⚠️ Not documented; would follow from the runtime's package set |
-| Data passing | Structured clone (binary codec): cycles, `Date`, `ArrayBuffer`, TypedArrays; `DataCloneError` on functions | `createSerializable`: very broad (Map, Set, RegExp, Error, functions-as-remotes, TypedArrays); cycles throw; captured objects frozen in dev | JSI wrappers; primitives copied, arrays/objects as C++ proxies | JSON only: `Date`/`Map`/`Set` → `{}`, cycles throw |
+| Data passing | Structured clone (binary codec): cycles, `Date`, `Map`, `Set`, `RegExp`, `Error`, `BigInt`, `ArrayBuffer`, TypedArrays; `DataCloneError` on functions | `createSerializable`: very broad (Map, Set, RegExp, Error, functions-as-remotes, TypedArrays); cycles throw; captured objects frozen in dev | JSI wrappers; primitives copied, arrays/objects as C++ proxies | JSON only: `Date`/`Map`/`Set` → `{}`, cycles throw |
+| Zero-copy binary handoff | ✅ Transfer list moves the backing store (`createTransferableBuffer` for a no-copy-ever buffer) — but Hermes has no real detach, so [the neutering is simulated](/docs/compat-seams#simulated-arraybuffer-transfer) | Postponed — transferable `ArrayBuffer`s ran into threading/GC issues in Hermes | ❌ | ❌ (JSON boundary) |
 | Shared state | `SharedStore` (subscribable tree), `SharedValue` (sync cell), `SharedBuffer` (raw shared memory + lock), `reactive()` proxy | `Synchronizable` (locking cell), `Shareable` (host/guest object) — shared *values* live up in Reanimated | `SharedValue` (thread-safe, proxy-wrapped objects) | `@react-native-runtimes/state`: shared Zustand-style store, sync reads, JSON at the boundary |
 | Typed RPC between threads | ✅ `defineModule` / JSModule bridge: one typed contract, promises, events both ways, `$ready` | ❌ (schedule functions; return via Promise variants) | ❌ (Promise return values) | ⚠️ `runtimeFunction` + `call().on()` (JSON args/returns) |
 | Runtime on the platform main thread | ✅ `UIWorker` — a full worker runtime on the UI thread, shared and persistent by default | ✅ The UI runtime — the model everything else is built around | ❌ Contexts are background threads; the "default" context is the React-JS one | ❌ (the point is the *opposite*: move a runtime **off** the main thread) |
-| Move an existing runtime onto another thread | ✅ `Thread` (experimental): the *same* runtime executes a callback on the main thread or a background thread — no serialization, closures and object identity intact | ❌ | ❌ | ❌ |
+| Move an existing runtime onto another thread | ✅ `Thread` (experimental), from JS: the *same* runtime executes a callback on the main thread or a named background thread — no serialization, closures and object identity intact | ✅ via the C++ API — Reanimated has juggled the UI worklet runtime between threads for years; not exposed as a JS-level API | ❌ | ❌ |
 | Can render UI on another thread | ❌ (headless by design) | ❌ (drives the UI thread's animation runtime, not React rendering) | ❌ | ✅ Fabric surfaces mounted on secondary runtimes — its headline feature |
 | Sync cross-thread calls | Sync shared reads (`SharedValue.value`, `SharedStore`), async calls | ✅ `runOnUISync`, `runOnRuntimeSync` — genuinely unique | ❌ (async only; sync shared-value reads) | Sync shared-store reads; async calls |
 | Debugging | Each worker is its own DevTools target; console forwarded to host with a `[Worker:name]` tag | Worklet stack symbolication; shared DevTools story | Console forwarded via `runOnJS` | Multiple JS targets in DevTools; stack traces don't cross runtimes |
@@ -84,6 +99,87 @@ And the two historical projects that deserve credit for getting here first:
 once JSI, Hermes, and the New Architecture made it possible to do properly:
 same standard API, but real threads in one process, structured clone instead of
 strings, and native modules that work.
+
+## What the Worklets team corrected us on
+
+This section exists because an earlier version of this page overclaimed, and the
+correction was worth more than the claim.
+
+### "Native modules work in a worker" was too strong
+
+The objection, paraphrased: React Native's native modules are tied to the main RN
+runtime. Their events are emitted on it. So a worker's HTTP request completes on
+the RN JS thread and gets forwarded — meaning a busy JS thread starves your worker
+anyway. And native modules generally aren't thread-safe, because they were written
+assuming one runtime on one thread.
+
+**Every part of that was accurate when it was written.** Worker module events were
+raised on the host runtime and copied out to interested workers, so a worker's
+network response really did depend on the host JS thread being free.
+
+We treated it as a bug report. Two rules are now enforced, and the second is the
+one that objection is about:
+
+1. A worker runtime never blocks the host runtime or the RN JS thread.
+2. A worker's native modules stay on that worker — its own event system, its own
+   module instances, no contamination of the main thread.
+
+Concretely, on **Android**: a worker serves its own device-event emitter, so a
+module's events are marshalled straight into that worker's
+`global.__rctDeviceEventEmitter` without ever touching the host runtime; module
+method bodies run on a per-worker native queue instead of inline on the worker's JS
+thread (mirroring what RN does on the host); and peer-module lookups resolve
+through the worker's own registry rather than handing back the host's instances.
+
+On **iOS**: the worker's `RCTCallableJSModules` routes device events into that
+worker's emitter, and its module registry resolves peers within the worker. Fixing
+that turned up a related bug worth admitting — `RCTNetworking` in a worker had an
+*empty* URL-handler list, so XHR and `fetch` inside an iOS worker had never worked
+at all. That is fixed, along with the same defect in `RCTImageLoader`.
+
+The claim is now tested rather than asserted. The suite pins the host JS thread in
+a busy loop and requires a worker's HTTP request to complete anyway; a separate
+test watches the host's device-event stream during a worker's request and requires
+that **none** of that request's events were dispatched on the host runtime.
+
+### What is still true from the objection
+
+- **Thread-safety is still the module's business.** Nothing here makes a module
+  that assumes one runtime on one thread suddenly safe on two. A worker gets its
+  own instance where the module's design allows, but a module holding process-wide
+  mutable state without a lock is still a hazard. Platform modules are therefore
+  opt-in per worker (`{ nativeModules: true }`), not on by default.
+- **We deny some modules outright** rather than pretend — the UI manager and its
+  neighbours are never constructed inside a worker.
+- **Everything above is version-sensitive**, and the seams that keep it working
+  across RN and Expo versions are listed in
+  [Hacks & compatibility seams](/docs/compat-seams).
+
+### The other corrections
+
+- **Worklet runtimes are not bare.** They have an event loop and timers from the
+  start, and can be created deliberately *without* them when the host supplies its
+  own cadence (as `react-native-audio-api` does). Our earlier "no imports, no
+  `fetch`, not even `setTimeout`" described `worklets-core`, and we let it colour
+  the description of `react-native-worklets` too. Corrected in the table above.
+- **Bundle Mode imports any library**, and its `fetch` is written from scratch
+  specifically so it runs off the JS thread — the same problem we were solving,
+  solved independently and, at the time, more honestly than we had.
+- **Worklet runtimes already move between threads** through the C++ API; Reanimated
+  has done it with the UI runtime for years. Our `Thread` is a JS-level API for
+  that idea, not the idea itself.
+- **A worklet on a dedicated runtime is close to a Web Worker already** — minus the
+  `postMessage`/`onmessage` surface. That is a fair characterisation and the table
+  should not have implied otherwise.
+
+### On the offer to collaborate
+
+Tomasz ended by suggesting the two projects could integrate rather than compete —
+Worklets providing battle-tested low-level abstractions, Workers providing the
+familiar high-level API. We think that's the right read, and the section below on
+[building other models on top](#flexible-enough-to-build-the-others-on-top) was
+written before the exchange with exactly that shape in mind. The door is open, and
+we'd rather build on their work than around it.
 
 ## Where the others are genuinely better
 
@@ -149,16 +245,14 @@ The README's framing is accurate to the implementation: a worker is *a headless
 React Native — no UI, but the same engine, the same timers and Promises, and
 the same native modules*.
 
-In the worklet model's default mode, a worklet is a stringified function
-re-evaluated in a bare runtime — no imports, no `fetch`, and (in
-`worklets-core`) not even `setTimeout`. Software Mansion is actively closing
-this gap with Bundle Mode, which is a genuinely exciting direction and has come
-a long way: it now ships its own Metro wrapper rather than asking you to patch
-Metro, and it gets `fetch` by injecting RN's C++ networking module and running
-RN's own `setUpXHR`. It's still opt-in rather than the default shape of a
-worklet. We simply started from the other end: full-environment first, because
-"run my existing parsing/crypto/database code on another thread" was the
-problem we cared about.
+A worklet runtime is not bare — it has an event loop and timers from the start,
+and Bundle Mode lets you import any library into one, with a `fetch` written from
+scratch so that requests run genuinely off the JS thread. The difference is where
+each project starts: Bundle Mode is opt-in on top of a model whose default unit is
+a stringified function plus its closure, and we started from full-environment-first
+because "run my existing parsing/crypto/database code on another thread" was the
+problem we cared about. (`worklets-core` is the genuinely minimal one: no
+`setTimeout`, no imports, closure-captured values and injected globals only.)
 
 `react-native-runtimes` also gives you a full environment — the fullest
 possible, since it's your whole app bundle. The trade is cost and coupling:
@@ -168,8 +262,7 @@ boundary is `JSON.stringify`'d, so `Date` and `Map` silently become `{}`. A
 worker here boots a ~150 KB shimmed bundle into a capped-heap Hermes runtime —
 Hermes-bytecode-compiled in release builds, so there's no parse step at all —
 and messages are structured-cloned by a binary codec that preserves cycles,
-`Date`, `ArrayBuffer`, and TypedArrays (with `Map`/`Set`/`Error` on the
-roadmap — the Web Worker spec is the contract we're filling in toward).
+`Date`, `Map`, `Set`, `RegExp`, `Error`, `BigInt`, `ArrayBuffer`, and TypedArrays.
 
 ### Communication is a ladder, not a single rung
 
@@ -282,9 +375,24 @@ Symmetry demands we list our own caveats as plainly as everyone else's:
   exercised by a compat matrix that rebuilds the library against every supported
   RN and Expo version, but it has not been through a wide production shakedown
   the way Reanimated's runtime has.
-- `Map`, `Set`, `RegExp`, `Error`, and `BigInt` don't structured-clone yet;
-  transfer-list detach and `SharedArrayBuffer` are out of scope (Hermes
-  limitations — `SharedBuffer` is the supported shared-memory path).
+- **Transfer is simulated, not enforced by the engine.** The transfer list really
+  does move the backing store, but Hermes has no `ArrayBuffer` detach, so a
+  transferred buffer is only neutered by *our* bookkeeping: the message path
+  refuses to reuse it and `.detached` reports `true`, while raw reads still
+  succeed unless you opt into `enableTransferGuard()`. `SharedArrayBuffer` does not
+  exist in Hermes; `SharedBuffer` is the supported shared-memory path. The full
+  reasoning is in [Hacks & compatibility seams](/docs/compat-seams).
+- **Native-module isolation depends on private RN internals.** It works, and it is
+  tested on both platforms, but it rests on version-sensitive seams (a reflective
+  event-emitter proxy, a worker-local `ReactContext`, hand-built `RCTNetworking`
+  and `RCTImageLoader`). A future RN version can move one of those; the compat
+  matrix is how we find out.
+- **Expo modules on iOS SDK 56+ still use the forwarding installer**, so those
+  module objects live on the main runtime. Android builds a real per-worker
+  `AppContext` on every SDK.
+- **Thread-safety of a given native module is still its own business** — a worker
+  gets its own instance where the module allows, but nothing here makes a module
+  written for one runtime safe on two.
 - No synchronous cross-thread *calls* — synchronous access is via the shared
   primitives, calls are async.
 - `Thread` is experimental and opt-in, and gives thread affinity rather than

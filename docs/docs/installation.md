@@ -225,6 +225,54 @@ crash-safe. The library uses a different strategy per platform:
 
 This compiles to nothing in non-Expo apps.
 
+#### iOS: how it attaches per SDK
+
+Expo has moved its native JSI surface twice, so the iOS installer picks one of three
+entry points at **pod-install time**. All three deliver the same JS-visible feature
+set — the difference is only which native API is reachable:
+
+| Expo SDK | Where the JSI API lives | How this library attaches |
+| --- | --- | --- |
+| **54** | `ExpoModulesCore` (ObjC++) | Uses `<ExpoModulesCore/EXJavaScriptRuntime.h>` and friends directly. |
+| **55** | `ExpoModulesJSI` pod, **bundled inside** `expo-modules-core`, same ObjC++ API | Same code path, headers imported as `<ExpoModulesJSI/…>`. |
+| **56+** | `expo-modules-jsi`, a **standalone package** with a Swift-only API | A small Swift shim reaches the raw `jsi::Runtime` / `jsi::Object` pointers via `withUnsafePointee`, and an ObjC++ installer drives them. |
+
+The switch is made in `ReactNativeWorkers.podspec` by checking whether
+`expo-modules-jsi` resolves as its own npm package — `canImport(ExpoModulesJSI)`
+alone can't tell SDK 55 from 56+, because 55 ships that pod too, with the *old* API.
+Nothing here needs app configuration.
+
+:::warning[Xcode requirements are version-specific on iOS]
+Two upstream constraints pull in opposite directions, so pick your Xcode by what you
+build against:
+
+- **Expo SDK 56+ needs Xcode ≥ 26.4.** Upstream `expo-modules-jsi` uses `weak let`,
+  which requires Swift 6.3 ([expo/expo#46242](https://github.com/expo/expo/issues/46242)).
+- **React Native 0.81 / 0.82 need Xcode ≤ 26.1.** The `fmt` pod they vendor fails to
+  compile with newer toolchains (a `consteval` diagnostic).
+
+Both are upstream issues reproducible without this library — a stock Expo 57 app
+fails the same way on Xcode 26.1. Android has no equivalent constraint.
+:::
+
+#### `subscription.remove()`
+
+`addListener` returns an Expo-shaped subscription and `remove()` works on both
+platforms. On **iOS** the removal is worker-side: the library registers **one**
+native bridge per `(module, event)` pair no matter how many worker listeners
+subscribe, and `remove()` drops your callback from that fan-out list. The underlying
+native subscription stays alive until the worker terminates, when all of them are
+released together.
+
+The practical consequences:
+
+- Subscribing and removing in a loop does **not** leak native subscriptions or
+  duplicate deliveries — a real bug in earlier alphas, now covered by the test suite.
+- After the last `remove()`, the module may still be *emitting* natively (the event
+  is simply dropped). If a module is expensive while it has any subscriber, stop it
+  through its own API rather than relying on `remove()`.
+- Terminating the worker removes everything; there is nothing to clean up by hand.
+
 :::note[Per-worker module instances on Android]
 On Android each worker re-instantiates the app's Expo modules (its own `AppContext`).
 This is ideal for request/response modules (device, crypto, constants, file-system…).

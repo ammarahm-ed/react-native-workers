@@ -33,16 +33,26 @@ available too.
 
 ## How delivery works
 
-There are two paths, matching how React Native itself routes events:
+There are two paths, and the difference is **which runtime's module emitted the
+event** — not what language it was written in:
 
-- **C++ (Cxx) module events** are emitted through the worker's own CallInvoker, so
-  they land **directly** on the worker.
-- **Java/Objective-C module events** — and anything emitted through the app's
-  `DeviceEventEmitter` — are emitted on the **host** runtime. The library forwards
-  those to any worker that has registered a listener (the event payload is
-  structured-cloned).
+- **Events from the worker's own modules** — C++, Java or Objective-C — land
+  **directly** on that worker. They are never dispatched on the host runtime and
+  never copied through it. This is what makes a worker's network response
+  independent of the RN JS thread; see
+  [isolation rules](./native-modules#isolation-rules).
+- **Events from the host app** — the app's own `DeviceEventEmitter.emit(...)`, or a
+  module owned by the host — originate on the host runtime. The library forwards
+  those to any worker that has registered a listener, structured-cloning the
+  payload.
 
 You don't have to think about which path an event takes; subscribing is the same.
+
+:::note[This changed in 1.0.0-alpha.3]
+Before that release, a worker module's Java/ObjC events *were* raised on the host
+runtime and forwarded back — so a worker's own events depended on the RN JS thread.
+That is fixed on both platforms.
+:::
 
 ## Example: forwarding an app event to a worker
 

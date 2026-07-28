@@ -202,6 +202,43 @@ MMKV are designed for concurrent access; not every library is.
 Modules that emit device events work too — see
 [Native events (`NativeEventEmitter`)](./native-events).
 
+## Isolation rules
+
+Two rules are enforced, and they are the difference between "native modules load in
+a worker" and "native modules are actually useful in a worker":
+
+1. **A worker never blocks the host runtime or the RN JS thread.**
+2. **A worker's native modules stay on that worker** — its own events, its own
+   module instances.
+
+What that means in practice:
+
+- **Events raised by a worker's modules never reach the host runtime.** They are
+  delivered directly into the worker that owns the module. Earlier versions
+  dispatched them on the host runtime and copied them back out, which meant a
+  worker's HTTP response depended on the RN JS thread being free.
+- **Module method bodies do not run on the worker's JS thread.** On Android each
+  worker has its own native-modules queue thread, mirroring what RN does on the
+  host, so a module doing blocking work doesn't stall that worker's event loop.
+- **Peer lookups resolve within the worker.** A module asking the context for
+  another module gets that worker's instance, not the host's.
+
+Both rules are covered by tests that fail if they regress — including one that pins
+the host JS thread in a busy loop and requires a worker's network request to
+complete anyway.
+
+:::caution[What isolation does *not* give you]
+None of this makes a module that assumes a single runtime on a single thread safe
+to use from two. A worker gets its own instance where the module's design allows
+it, but a module holding process-wide mutable state without a lock is still a
+hazard — see the note on thread-safety above. This is why platform modules are
+opt-in per worker rather than on by default.
+
+These guarantees also rest on private React Native internals that move between
+versions. [Hacks & compatibility seams](/docs/compat-seams) lists exactly which
+ones and what would let us stop depending on them.
+:::
+
 ## How it works (short version)
 
 - **C++ modules** resolve from the process-global CxxTurboModule map, bound to the
@@ -214,11 +251,17 @@ Modules that emit device events work too — see
   under the app classloader so JNI resolves your classes. The denylist is applied
   to that package list, and worker-safe replacements (such as the blob module) are
   appended to it. The registry is built **per worker**, against a
-  `ReactApplicationContext` reporting that worker's runtime — see
-  [JSI libraries](#jsi-libraries).
+  `ReactApplicationContext` reporting that worker's runtime, device-event target,
+  and native-modules queue — see [JSI libraries](#jsi-libraries).
 
-Method calls currently run inline on the worker's JS thread. The manager is
-invalidated **before** the worker runtime is destroyed, so there's no leak.
+On Android, method bodies run on the worker's **own native-modules queue thread**,
+not on its JS thread — so `assertOnNativeModulesQueueThread()` and
+`runOnNativeModulesQueueThread()` inside a worker refer to that worker's queue. On
+iOS they run on the invoker RN gives the module, as on the host.
+
+The manager is invalidated **before** the worker runtime is destroyed, so there's
+no leak, and teardown is ordered so a module's own cleanup work (which modules
+legitimately hand to the native queue) still runs.
 
 Creating and tearing down workers that use native modules is exercised on every
 release: repeated create → call → terminate cycles with both a TurboModule

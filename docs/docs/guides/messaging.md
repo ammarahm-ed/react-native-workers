@@ -33,21 +33,19 @@ Values are serialized with a structured-clone algorithm, so you can send:
 - plain objects and arrays, **including cycles and shared references**
   (`a.self = a` works; two properties pointing at the same object stay shared);
 - `Date`;
-- typed arrays (`Uint8Array`, `Float64Array`, …) and `ArrayBuffer`.
+- typed arrays (`Uint8Array`, `Float64Array`, …) and `ArrayBuffer`;
+- `Map`, `Set`, `RegExp`, `Error` (name, message, stack), and `BigInt`.
 
 ```js
 const a = { name: 'node' };
 a.self = a;                       // cycle — fine
 worker.postMessage({ a, again: a }); // shared ref preserved on the other side
+worker.postMessage(new Map([['k', new Set([1, 2])]])); // fine
 ```
 
 You **cannot** send functions, class instances (they arrive as plain data), or
 things that hold native handles. Sending an unsupported value throws a
 `DataCloneError`.
-
-:::note[Not yet cloned]
-`Map`, `Set`, `RegExp`, `Error`, and `BigInt` are not part of the v1 clone subset.
-:::
 
 ## Binary data & transfer
 
@@ -55,18 +53,64 @@ Binary payloads (`ArrayBuffer` / typed arrays) are the common heavy case — ima
 bytes, database blobs. They are copied at most once and decoded zero-copy on the
 receiving side, so throughput is high (measured ~5 GB/s on Android).
 
-You can pass a **transfer list** as the second argument to hint that a buffer is
-being handed off:
+Pass a **transfer list** as the second argument to hand a buffer off instead of
+copying it:
 
 ```js
 const bytes = new Uint8Array(8 * 1024 * 1024);
 worker.postMessage(bytes, [bytes.buffer]);
+// `bytes.buffer` now belongs to the receiver — see the caveat below
 ```
 
-:::info
-Hermes does not support true `ArrayBuffer` detach, so the transfer list is a
-throughput hint rather than a zero-copy ownership transfer. The buffer remains
-usable on the sending side. See [Performance](../performance).
+### Getting a genuinely zero-copy buffer
+
+Whether the handoff copies depends on where the buffer came from, and this is a
+Hermes constraint rather than a choice:
+
+| Buffer | On transfer |
+| --- | --- |
+| `createTransferableBuffer(n)` | **Zero-copy**, every hop, both directions |
+| `new ArrayBuffer(n)` | Copied once on the first hop, then zero-copy |
+
+`createTransferableBuffer(n)` is a global in every runtime (host and worker) and
+returns an ordinary `ArrayBuffer` — the only difference is that its backing store
+is one Hermes will let us move. Hermes only surrenders the store of an *external*
+buffer, so a plain `new ArrayBuffer` has to be copied once before it becomes
+transferable.
+
+```js
+const buf = createTransferableBuffer(8 * 1024 * 1024);
+new Uint8Array(buf).set(pixels);
+worker.postMessage(buf, [buf]);   // no copy at all
+```
+
+### After you transfer
+
+:::warning[Transfer is enforced by this library, not by the engine]
+Hermes has no `ArrayBuffer` detach, so a transferred buffer is not *neutered* the
+way it would be in a browser. What is always enforced:
+
+- the message path refuses to clone or re-transfer a buffer you already gave away;
+- `buffer.detached` reports `true`.
+
+What is **not** enforced by default: reading or writing the bytes still works on
+the sending side, and racing the receiver that way is a data race.
+
+Call `enableTransferGuard()` once, early, to make stale access throw instead:
+
+```js
+import { enableTransferGuard } from '@ammarahmed/react-native-workers';
+enableTransferGuard();
+```
+
+It is opt-in because it patches global constructors (`Uint8Array`, `DataView`,
+`%TypedArray%.prototype`), which has real costs — `value.constructor === Uint8Array`
+stops matching, every view construction pays a `Reflect.construct`, and it can
+collide with other libraries that patch the same globals. Indexed access on a view
+you already created is still not interceptable even with the guard on.
+
+See [Hacks & compatibility seams](/docs/compat-seams#simulated-arraybuffer-transfer)
+for why this is shaped the way it is and what would remove it.
 :::
 
 ## Message ordering & buffering
