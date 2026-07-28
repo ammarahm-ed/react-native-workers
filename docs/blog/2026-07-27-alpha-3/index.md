@@ -1,22 +1,22 @@
 ---
 slug: alpha-3
-title: '1.0.0-alpha.3: real native-module isolation, zero-copy transfer, and a comparison page that had it wrong'
+title: '1.0.0-alpha.3: real native-module isolation, zero-copy transfer, and a comparison page I had wrong'
 authors: [ammar]
 tags: [release, alpha, expo, isolation]
 ---
 
 `1.0.0-alpha.3` is the release where a public critique turned into a work item.
 
-Someone from the Worklets team read our comparison page and pointed out, politely
+Someone from the Worklets team read my comparison page and pointed out, politely
 and correctly, that one of its central claims did not hold: native modules in a
-worker were not as isolated as we implied. A worker's HTTP response still landed on
+worker were not as isolated as I implied. A worker's HTTP response still landed on
 the React Native JS thread. If that thread was busy, your worker waited — which is
 the exact problem a worker is supposed to solve.
 
 He was right. This release is mostly what it took to make that claim true, plus the
 zero-copy binary transfer he'd separately called out as missing, plus a new
 [Hacks & compatibility seams](/docs/compat-seams) page that writes down every place
-we're leaning on private internals and what upstream change would let us delete it.
+I'm leaning on private internals and what upstream change would let me delete it.
 
 {/* truncate */}
 
@@ -31,7 +31,7 @@ either, because nothing ever asked them to be.
 
 That was an accurate description of what the library did.
 
-Rather than reword the page, we wrote down two rules and made them true:
+Rather than reword the page, I wrote down two rules and made them true:
 
 1. **A worker runtime never blocks the host runtime or the RN JS thread.**
 2. **A worker's native modules stay on that worker** — its own event system, its
@@ -66,7 +66,7 @@ Fixing that surfaced something worse, which is worth stating plainly:
 **XHR and `fetch` had never worked inside an iOS worker.** `RCTNetworking` gets its
 URL handlers through an injected provider and otherwise falls back to `self.bridge`
 — and bridgeless has no bridge. The host app never notices because RN's own setup
-injects the provider on its behalf; our worker built the module plainly and got an
+injects the provider on its behalf; my worker built the module plainly and got an
 empty handler list. Every request failed with *"No suitable URL request handler
 found"*. It survived this long because the tests covering it had only ever run on
 Android.
@@ -78,9 +78,9 @@ it was quietly breaking more than images.
 
 ## The claim is now a test, not a sentence
 
-The lesson we keep re-learning is that a verified claim and a verified *belief* look
+The lesson I keep re-learning is that a verified claim and a verified *belief* look
 identical until something forces the difference. So the isolation rules are asserted
-by tests that would fail if we regressed them:
+by tests that would fail if I regressed them:
 
 - one pins the host JS thread in a busy loop and requires a worker's HTTP request to
   complete anyway;
@@ -97,9 +97,9 @@ by tests that would fail if we regressed them:
 
 The other thing the thread called out: Worklets postponed transferable
 `ArrayBuffer`s after hitting threading and GC issues in Hermes, and wondered whether
-we'd got it right.
+I'd got it right.
 
-Partly. Here is exactly what we have, including the part that isn't real:
+Partly. Here is exactly what exists, including the part that isn't real:
 
 `postMessage(value, [buffer])` genuinely moves the backing store rather than copying
 it. `createTransferableBuffer(n)` returns an `ArrayBuffer` that is zero-copy on
@@ -108,12 +108,13 @@ an *external* buffer, so a plain `new ArrayBuffer(n)` still costs one copy on th
 first hop.
 
 What is **not** real is the detach. Hermes has no `ArrayBuffer` detach and does not
-export one, so a transferred buffer cannot be neutered by the engine. We enforce
-what we can: the message path refuses to clone or re-transfer a buffer you already
-gave away, and `.detached` reports `true`. But raw reads on the sending side still
-succeed, and racing the receiver that way is a data race. `enableTransferGuard()`
-makes stale access throw — it's opt-in because it patches global constructors, which
-breaks `value.constructor === Uint8Array` and taxes every view construction.
+export one, so a transferred buffer cannot be neutered by the engine. The library
+enforces what it can: the message path refuses to clone or re-transfer a buffer you
+already gave away, and `.detached` reports `true`. But raw reads on the sending side
+still succeed, and racing the receiver that way is a data race.
+`enableTransferGuard()` makes stale access throw — it's opt-in because it patches
+global constructors, which breaks `value.constructor === Uint8Array` and taxes every
+view construction.
 
 Structured clone also learned `Map`, `Set`, `RegExp`, `Error` and `BigInt` this
 cycle.
@@ -135,7 +136,7 @@ an event target, or a JSI installer to a runtime that isn't the app's main one.
 ## Also in this release
 
 - **Expo SDK 55, 56 and 57 build again on iOS.** The per-worker `AppContext` added
-  last cycle was only ever verified against SDK 54, which is what our Expo example
+  last cycle was only ever verified against SDK 54, which is what my Expo example
   pins — it did not compile on any other SDK, so those apps couldn't build the
   library at all. Found by the compat matrix, which had not been run against that
   code.
@@ -170,5 +171,5 @@ collaborate rather than compete. The comparison page has been
 [rewritten](/docs/prior-art#what-the-worklets-team-corrected-us-on) to say what's
 actually true, including the parts where Worklets is ahead.
 
-If you find another claim of ours that doesn't hold, please open an issue. We'd
+If you find another claim of mine that doesn't hold, please open an issue. I'd
 rather be corrected than flattering.
