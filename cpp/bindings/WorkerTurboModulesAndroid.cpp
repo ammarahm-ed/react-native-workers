@@ -502,9 +502,14 @@ std::function<void(Runtime&)> installWorkerTurboModules(
   //
   // `nativeQueue` is still captured so the queue object outlives the modules that
   // post to it; it stops and joins when this callback is destroyed.
-  return [manager, sinkId, queueId, nativeQueue](Runtime&) {
+  // The teardown callback is invoked with this same worker runtime, so the
+  // runtime->queue mapping is dropped through the PARAMETER rather than a
+  // captured `&rt` — capturing the reference would outlive nothing here, but it
+  // does not compile (no capture-default) and would be a dangling read the day
+  // the callback is ever invoked with anything else.
+  return [manager, sinkId, queueId, nativeQueue](Runtime& workerRt) {
     unregisterWorkerDeviceEventSink(sinkId);
-    clearWorkerNativeQueueIdForRuntime(&rt);
+    clearWorkerNativeQueueIdForRuntime(&workerRt);
     JNIEnv* env = facebook::jni::Environment::current();
     jclass cls = env->GetObjectClass(manager.get());
     jmethodID invalidate = env->GetMethodID(cls, "invalidate", "()V");
