@@ -44,13 +44,26 @@ class WorkerNativeQueue {
   bool isUsable() const;
 
  private:
-  void pump();
+  // Everything the pump thread touches lives here, behind a shared_ptr the thread
+  // owns a reference to.
+  //
+  // The queue object itself can die ON the queue thread: a module invalidated
+  // during teardown drops the last reference from inside a task it is running.
+  // The destructor detaches in that case (it cannot join itself), but with the
+  // state inlined the pump loop then returned into a destroyed mutex — a
+  // use-after-free the detach was supposed to avoid. Sharing the state means the
+  // loop always has something valid to finish on.
+  struct State {
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::deque<std::function<void()>> tasks;
+    bool stopped = false;
+    std::thread::id threadId;
+  };
 
-  mutable std::mutex mutex_;
-  std::condition_variable cv_;
-  std::deque<std::function<void()>> tasks_;
-  bool stopped_ = false;
-  std::thread::id threadId_;
+  static void pump(const std::shared_ptr<State>& state);
+
+  std::shared_ptr<State> state_;
   std::thread thread_;
 };
 

@@ -87,44 +87,49 @@ void postRunnableNative(JNIEnv* env, jclass, jlong queueId, jobject runnable) {
 
 } // namespace
 
-WorkerNativeQueue::WorkerNativeQueue() {
-  thread_ = std::thread([this]() {
+WorkerNativeQueue::WorkerNativeQueue() : state_(std::make_shared<State>()) {
+  // The thread owns a reference to the state, so it can finish its loop even if
+  // the queue object is destroyed from inside one of its own tasks (see State).
+  thread_ = std::thread([state = state_]() {
     // Same scoping as the worker JS thread: module bodies call JNI, and FindClass
     // must resolve app classes for the whole life of the thread.
-    runInWorkerThreadScope([this]() {
+    runInWorkerThreadScope([&state]() {
       markQueueThread();
-      pump();
+      pump(state);
     });
   });
   {
-    std::unique_lock<std::mutex> lock(mutex_);
-    // threadId_ is written by pump() before it takes any task; wait for it so
+    std::unique_lock<std::mutex> lock(state_->mutex);
+    // threadId is written by pump() before it takes any task; wait for it so
     // isCurrentThread() is meaningful the moment the constructor returns.
     //
     // BOUNDED: if the thread body never runs (a JVM attach failure inside the
     // thread scope), an unconditional wait would block the worker's JS thread
     // forever inside installWorkerTurboModules, with nothing logged. Time out and
     // let the caller fall back instead.
-    if (!cv_.wait_for(lock, std::chrono::seconds(5), [this] {
-          return threadId_ != std::thread::id();
+    if (!state_->cv.wait_for(lock, std::chrono::seconds(5), [this] {
+          return state_->threadId != std::thread::id();
         })) {
       RNWQ_LOG("queue thread failed to start within 5s — this worker will fall "
                "back to running module bodies inline");
-      stopped_ = true;
+      state_->stopped = true;
     }
   }
 }
 
 WorkerNativeQueue::~WorkerNativeQueue() {
+  bool onQueueThread;
   {
-    std::lock_guard<std::mutex> lock(mutex_);
-    stopped_ = true;
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    state_->stopped = true;
+    onQueueThread = std::this_thread::get_id() == state_->threadId;
   }
-  cv_.notify_all();
+  state_->cv.notify_all();
   if (thread_.joinable()) {
     // Never join from the queue itself (a module tearing down its own worker);
-    // detaching leaves the loop to exit on the stop flag it has already seen.
-    if (std::this_thread::get_id() == threadId_) {
+    // detaching leaves the loop to exit on the stop flag it has already seen —
+    // safely, because the loop reads the shared state, not this object.
+    if (onQueueThread) {
       thread_.detach();
     } else {
       thread_.join();
@@ -132,21 +137,21 @@ WorkerNativeQueue::~WorkerNativeQueue() {
   }
 }
 
-void WorkerNativeQueue::pump() {
+void WorkerNativeQueue::pump(const std::shared_ptr<State>& state) {
   {
-    std::lock_guard<std::mutex> lock(mutex_);
-    threadId_ = std::this_thread::get_id();
+    std::lock_guard<std::mutex> lock(state->mutex);
+    state->threadId = std::this_thread::get_id();
   }
-  cv_.notify_all();
+  state->cv.notify_all();
 
   for (;;) {
     std::function<void()> task;
     {
-      std::unique_lock<std::mutex> lock(mutex_);
-      cv_.wait(lock, [this] { return stopped_ || !tasks_.empty(); });
-      if (stopped_ && tasks_.empty()) return;
-      task = std::move(tasks_.front());
-      tasks_.pop_front();
+      std::unique_lock<std::mutex> lock(state->mutex);
+      state->cv.wait(lock, [&] { return state->stopped || !state->tasks.empty(); });
+      if (state->stopped && state->tasks.empty()) return;
+      task = std::move(state->tasks.front());
+      state->tasks.pop_front();
     }
     try {
       task();
@@ -155,16 +160,20 @@ void WorkerNativeQueue::pump() {
     } catch (...) {
       RNWQ_LOG("native module task threw (non-std)");
     }
+    // Dropped OUTSIDE the lock and before waiting again: a task's captures can
+    // own the last reference to this queue, and running ~WorkerNativeQueue while
+    // holding its own mutex would deadlock on the destructor's lock.
+    task = nullptr;
   }
 }
 
 bool WorkerNativeQueue::post(std::function<void()> task) {
   {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (stopped_) return false;
-    tasks_.push_back(std::move(task));
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    if (state_->stopped) return false;
+    state_->tasks.push_back(std::move(task));
   }
-  cv_.notify_one();
+  state_->cv.notify_one();
   return true;
 }
 
@@ -178,9 +187,9 @@ void WorkerNativeQueue::runSync(std::function<void()> task) {
   auto done = std::make_shared<bool>(false);
   bool queued = false;
   {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!stopped_) {
-      tasks_.push_back([task = std::move(task), mtx, cv, done]() {
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    if (!state_->stopped) {
+      state_->tasks.push_back([task = std::move(task), mtx, cv, done]() {
         task();
         {
           std::lock_guard<std::mutex> lk(*mtx);
@@ -192,19 +201,19 @@ void WorkerNativeQueue::runSync(std::function<void()> task) {
     }
   }
   if (!queued) return; // torn down: a sync call has nowhere to run
-  cv_.notify_one();
+  state_->cv.notify_one();
   std::unique_lock<std::mutex> lk(*mtx);
   cv->wait(lk, [&] { return *done; });
 }
 
 bool WorkerNativeQueue::isUsable() const {
-  std::lock_guard<std::mutex> lock(mutex_);
-  return !stopped_ && threadId_ != std::thread::id();
+  std::lock_guard<std::mutex> lock(state_->mutex);
+  return !state_->stopped && state_->threadId != std::thread::id();
 }
 
 bool WorkerNativeQueue::isCurrentThread() const {
-  std::lock_guard<std::mutex> lock(mutex_);
-  return std::this_thread::get_id() == threadId_;
+  std::lock_guard<std::mutex> lock(state_->mutex);
+  return std::this_thread::get_id() == state_->threadId;
 }
 
 void WorkerNativeMethodCallInvoker::invokeAsync(
