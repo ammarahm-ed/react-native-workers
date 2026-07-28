@@ -22,7 +22,7 @@ I'm leaning on private internals and what upstream change would let me delete it
 
 ## The correction
 
-[Tomasz Żeliszewski's thread](https://x.com/tjzeldev/status/2081673853831430226)
+[Tomasz Żelawski's thread](https://x.com/tjzeldev/status/2081673853831430226)
 made the argument concretely: React Native's native modules are tied to the main RN
 runtime, all their events are emitted on it, so `react-native-workers` must be
 forwarding those events into worker runtimes and copying the payloads. A request
