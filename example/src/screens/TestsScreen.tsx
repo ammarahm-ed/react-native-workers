@@ -676,6 +676,85 @@ export default function TestsScreen() {
           detail: JSON.stringify(teardown),
         });
 
+        // Teardown UNDER LOAD — the case the test above cannot reach.
+        //
+        // Above, each worker is terminated after its reply, so its native queue is
+        // idle and its runtime quiet. The dangerous shape is the opposite: many
+        // workers torn down while module bodies are mid-flight on their queue
+        // threads, with continuations about to hop back onto a runtime that is
+        // being destroyed. That is what ~WorkerNativeQueue's self-destruct path and
+        // the invalidate-then-drop-queue ordering exist for, and neither had ever
+        // been exercised.
+        //
+        // Failure here is a native crash or a hang, not an assertion — so the
+        // check that matters is that the suite gets to the next line at all, and
+        // that a fresh worker still works afterwards.
+        const stress = await new Promise<any>((resolve) => {
+          const total = 24;
+          const workers: any[] = [];
+          let ready = 0;
+          let errored = 0;
+          let settled = false;
+          const finish = (extra: any) => {
+            if (settled) return;
+            settled = true;
+            // Terminate everything AT ONCE, while every one of them is busy.
+            workers.forEach((w) => {
+              try {
+                w.terminate();
+              } catch {
+                // A worker that already died must not stop the others.
+              }
+            });
+            resolve({ ready, errored, ...extra });
+          };
+          const guard = setTimeout(() => finish({ __timeout: true }), 20000);
+          for (let i = 0; i < total; i++) {
+            try {
+              const w = new Worker('../workers/teardownstress', {
+                nativeModules: true,
+              });
+              workers.push(w);
+              w.onmessage = (e: any) => {
+                if (e.data?.ready === true) ready += 1;
+                else errored += 1;
+                if (ready + errored >= total) {
+                  clearTimeout(guard);
+                  finish({});
+                }
+              };
+              w.onerror = () => {
+                errored += 1;
+                if (ready + errored >= total) {
+                  clearTimeout(guard);
+                  finish({});
+                }
+              };
+              w.postMessage('go');
+            } catch {
+              // Spawning 24 at once can legitimately fail; count it and continue
+              // rather than abandoning the workers already running.
+              errored += 1;
+            }
+          }
+        });
+        // A worker created after the storm proves the host runtime and the native
+        // machinery both survived it — a crash would never reach here, but a
+        // wedged queue or a leaked global ref shows up as this failing.
+        const afterStress = await once(
+          `self.onmessage = function () { self.postMessage({ alive: 1 + 1 }); };`,
+          'go',
+          8000
+        );
+        all.push({
+          name: 'teardown under load (24 busy workers terminated at once)',
+          pass:
+            stress?.ready === 24 &&
+            !stress?.__timeout &&
+            afterStress?.alive === 2,
+          detail: JSON.stringify({ ...stress, afterStress }),
+        });
+
         // NativeEventEmitter: a host device event is forwarded into the worker.
         // (Java/ObjC modules emit device events on the host runtime; the library
         // forwards them to opted-in workers. Emitting from JS exercises the same
@@ -1162,6 +1241,47 @@ export default function TestsScreen() {
             // context, never asserted on)
             eventIsolation.hostSaw === 0,
           detail: JSON.stringify(eventIsolation),
+        });
+
+        // RCTImageLoader in a worker — the sibling of the RCTNetworking bug, and
+        // the case that proves a worker module can reach its PEERS.
+        //
+        // On iOS both modules are normally built by the host with injected
+        // dependency providers; built plainly in a worker the image loader had no
+        // loaders and no decoders. Repairing that exposed the deeper one: it asks
+        // `moduleRegistry` for its peer `Networking` module, and a worker answered
+        // nil, so it still reported "no suitable image URL loader". That registry
+        // is the same mechanism third-party modules use to find each other.
+        //
+        // See ../workers/imageloader for why the fixture is a file:// GIF.
+        const imageLoader = await new Promise<any>((resolve) => {
+          try {
+            const w = new Worker('../workers/imageloader', {
+              nativeModules: true,
+            });
+            const timer = setTimeout(() => {
+              w.terminate();
+              resolve({ __timeout: true });
+            }, 10000);
+            w.onmessage = (e: any) => {
+              clearTimeout(timer);
+              w.terminate();
+              resolve(e.data);
+            };
+            w.onerror = (e: any) => {
+              clearTimeout(timer);
+              w.terminate();
+              resolve({ __error: e.message });
+            };
+            w.postMessage('go');
+          } catch (err) {
+            resolve({ __threw: String((err as any)?.message ?? err) });
+          }
+        });
+        all.push({
+          name: 'ImageLoader decodes inside a worker (loaders + decoders + peer)',
+          pass: imageLoader?.width === 1 && imageLoader?.height === 1,
+          detail: JSON.stringify(imageLoader),
         });
 
         // performance.now() exists in a worker and behaves. It had no test:
