@@ -177,6 +177,93 @@ function installTarball(dir, logPath) {
   return run(`npm install "${TARBALL}" --legacy-peer-deps`, abs, logPath);
 }
 
+// RN 0.81/0.82 vendor an fmt whose format-string check is `consteval`, and Xcode
+// >= 26.2 rejects it ("call to consteval function … is not a constant expression").
+// It is an upstream incompatibility reproducible in a stock RN app — but left
+// alone it makes those two targets permanently un-buildable on a modern Xcode,
+// which turns the OLDEST supported versions into the matrix's blind spot. That is
+// exactly where cross-version breaks hide.
+//
+// fmt itself provides the opt-out: `FMT_USE_CONSTEVAL` is honoured when defined
+// externally, and 0 downgrades the check from compile-time to run-time. Define it
+// in the header rather than through xcodebuild or an extra `post_install`: a
+// command-line `GCC_PREPROCESSOR_DEFINITIONS` outranks every per-target value
+// (dropping COCOAPODS=1, RCT_METRO_PORT, …), and a second `post_install` block
+// silently REPLACES React Native's own.
+//
+// Only the scaffold's disposable Pods/ is touched, only for the affected versions,
+// so every other target still reports what a real app would see.
+function relaxFmtConsteval(abs, logPath) {
+  // Rooted at ios/, not ios/Pods: RN ships fmt through a prebuilt
+  // `ReactNativeDependencies.xcframework` whose Headers/fmt is a SEPARATE copy
+  // from the CocoaPods one, and it is the copy the compiler actually reads.
+  // Patching only Pods/ reported success and changed nothing.
+  const searchRoot = path.join(abs, 'ios');
+  const MARKER = '/* [matrix] consteval disabled */';
+  let patched = 0;
+  // Pods/Headers/** are SYMLINKS into the pod source, so the same header is
+  // reachable by several paths — resolve to the real file and patch it once.
+  // CocoaPods also leaves those sources read-only, hence the chmod.
+  const seen = new Set();
+  const walk = (dir) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+        continue;
+      }
+      // fmt moved the macro from core.h to base.h; patch whichever exists.
+      if (entry.name !== 'base.h' && entry.name !== 'core.h') continue;
+      if (path.basename(dir) !== 'fmt') continue;
+      let real;
+      try {
+        real = fs.realpathSync(full);
+      } catch {
+        continue; // dangling symlink
+      }
+      if (seen.has(real)) continue;
+      seen.add(real);
+      try {
+        const source = fs.readFileSync(real, 'utf8');
+        if (source.includes(MARKER)) continue; // already patched
+        // Defining FMT_USE_CONSTEVAL=0 from outside is NOT enough: only newer
+        // fmt honours a pre-existing definition ("Use the provided definition"),
+        // and the version RN 0.81/0.82 vendor redefines it unconditionally — the
+        // header was rewritten, reported as patched, and changed nothing.
+        // Neutralise the macro where it is defined instead.
+        const next = source.replace(
+          /#(\s*)define(\s+)FMT_CONSTEVAL(\s+)consteval/g,
+          `#$1define$2FMT_CONSTEVAL ${MARKER}`
+        );
+        if (next === source) continue; // nothing to disable in this header
+        fs.chmodSync(real, 0o644);
+        fs.writeFileSync(real, next);
+        patched += 1;
+      } catch (err) {
+        fs.appendFileSync(
+          logPath,
+          `\n[matrix] could not patch ${real}: ${err.message}\n`
+        );
+      }
+    }
+  };
+  walk(searchRoot);
+  fs.appendFileSync(
+    logPath,
+    `\n[matrix] relaxed fmt consteval in ${patched} header(s) — see relaxFmtConsteval()\n`
+  );
+  return patched > 0;
+}
+
+// The RN versions that need the fmt workaround above.
+const NEEDS_FMT_RELAX = /^rn_0\.(81|82)$/;
+
 function build(dir, logPath) {
   const abs = path.join(PLATFORM_DIR, dir);
   if (platform === 'android') {
@@ -190,6 +277,8 @@ function build(dir, logPath) {
   // discovered afterwards — reading the directory first finds nothing on a fresh
   // scaffold and hands xcodebuild the literal string "undefined".
   if (!run(`cd ios && pod install`, abs, logPath)) return false;
+  // After pod install (fmt is fetched by CocoaPods), before xcodebuild.
+  if (NEEDS_FMT_RELAX.test(dir)) relaxFmtConsteval(abs, logPath);
   const iosDir = path.join(abs, 'ios');
   const workspace = fs.readdirSync(iosDir).find((f) => f.endsWith('.xcworkspace'));
   if (!workspace) {
