@@ -53,6 +53,31 @@ timers and Promises, and the same native modules you already use.
 | **Small bundles** | Worker bundles ship ~150 KB instead of ~1.4 MB, because the UI half of React Native never enters the graph. |
 | **Debuggable** | Every worker is its own DevTools target — breakpoints, stepping, and `console.log` forwarded to the host with a `[Worker:name]` tag. |
 
+## Workers vs. Worklets
+
+These get compared a lot, so briefly — they solve different problems and are not
+competitors:
+
+- **The unit differs.** A worklet is a *function* plus its captured closure, moved
+  into another runtime. A worker is a *file* with its own Metro bundle graph, so you
+  `import` npm packages normally and there are no closure-capture rules to learn.
+- **Both give you real JS runtimes.** Worklet runtimes have event loops and timers
+  too, and Bundle Mode lets you import libraries into them. That part isn't a
+  difference.
+- **The API differs.** Workers speak the Web spec — `new Worker()`, `postMessage`,
+  `onmessage`. Worklets are a lower-level imperative primitive for scheduling work
+  onto a runtime, which is more flexible and less familiar.
+- **For animations and gestures, use Reanimated / Worklets.** Their synchronous UI
+  runtime is purpose-built and battle-tested for driving UI at 60–120fps. A
+  message-passing worker shouldn't be your animation layer.
+- **For "get this work off my JS thread", workers fit.** Parsing, crypto, image
+  work, database access, network I/O — with per-worker native module instances and
+  events that stay on the worker.
+
+The long version, including where Worklets is ahead and corrections from their team,
+is in the
+[comparison](https://ammarahm-ed.github.io/react-native-workers/docs/prior-art).
+
 ## Install
 
 ```sh
@@ -135,10 +160,10 @@ const sub = emitter.addListener('SomeEvent', (payload) => {
 });
 ```
 
-C++ module events are delivered straight to the worker via its own CallInvoker.
-Events from Java/ObjC modules — and anything sent through the app's
-`DeviceEventEmitter` — are emitted on the host and forwarded to workers that
-registered a listener.
+Events from the **worker's own** modules — C++, Java or ObjC — are delivered
+straight to that worker and never touch the app's runtime. Events raised by the
+**host** (the app's own `DeviceEventEmitter`, or a module the host owns) are
+forwarded to workers that registered a listener.
 [Details](https://ammarahm-ed.github.io/react-native-workers/docs/guides/native-events).
 
 </details>
@@ -266,20 +291,34 @@ access with a message naming the export, instead of being silently `undefined`.
 
 ## What's supported
 
-Structured clone (objects, arrays, cycles, typed arrays, `ArrayBuffer`, `Date`),
-`self` / `postMessage` / `onmessage` / `close` / `addEventListener`, timers,
-Promises, `structuredClone`, error propagation to `onerror`, `terminate`, worker
-isolation, and `NativeEventEmitter`.
+Structured clone (objects, arrays, cycles, typed arrays, `ArrayBuffer`, `Date`,
+`Map`, `Set`, `RegExp`, `Error`, `BigInt`), `self` / `postMessage` / `onmessage` /
+`close` / `addEventListener`, timers, Promises, `structuredClone`, error
+propagation to `onerror`, `terminate`, worker isolation, and `NativeEventEmitter`.
+
+Binary data transfers instead of copying: `postMessage(v, [buf])` moves the
+backing store, and `createTransferableBuffer(n)` gives you a buffer that's
+zero-copy on every hop.
+
+Native modules inside a worker are **isolated** — their events are delivered to
+that worker rather than being raised on the app's runtime and copied back, their
+method bodies run off the worker's JS thread (Android), and peer lookups resolve
+to the worker's own instances. A worker's network I/O doesn't depend on the RN JS
+thread being free.
 
 Also inside a worker: **Expo Modules** via `requireNativeModule(...)` on both
 platforms, and the experimental
 [`Thread`](https://ammarahm-ed.github.io/react-native-workers/docs/guides/threads)
 API for running a worker's own runtime on another thread.
 
-`Map` / `Set` / `RegExp` / `Error` / `BigInt` are not in the clone subset yet.
-Full transfer-list detach and `SharedArrayBuffer` are out of scope (Hermes
-limitations) — [`SharedBuffer`](#a-tour) covers the shared-memory use case
-instead.
+**Limits worth knowing.** Hermes has no `ArrayBuffer` detach, so a transferred
+buffer isn't neutered by the engine — this library refuses to reuse it and
+`.detached` reports `true`, but raw reads still succeed unless you call
+`enableTransferGuard()`. `SharedArrayBuffer` doesn't exist in Hermes;
+[`SharedBuffer`](#a-tour) is the shared-memory path. Native-module isolation leans
+on private React Native internals, all of which are listed — with what would let me
+delete them — in
+[Hacks & compatibility seams](https://ammarahm-ed.github.io/react-native-workers/docs/compat-seams).
 
 ## Example app
 
