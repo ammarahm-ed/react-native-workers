@@ -10,6 +10,7 @@ import DownloadsScreen from './DownloadsScreen';
 import ImageFxScreen from './ImageFxScreen';
 import SensorScreen from './SensorScreen';
 import ParseScreen from './ParseScreen';
+import MarkdownEditorScreen from './MarkdownEditorScreen';
 
 export type ScreenId = string;
 
@@ -33,6 +34,12 @@ export const SCREENS: ScreenDef[] = [
     title: 'Note editor (SharedStore)',
     blurb: 'Live stats + autosave computed in a worker, zero messages',
     component: NotesScreen,
+  },
+  {
+    id: 'markdown',
+    title: 'Markdown editor (parse per keystroke)',
+    blurb: 'One parser, two threads — the same re-parse on every keystroke',
+    component: MarkdownEditorScreen,
   },
   {
     id: 'parse',
