@@ -41,10 +41,10 @@ export const LIVE_BYTES = FEED_COUNT * LIVE_STRIDE * 4;
  * list cannot be handed its layout up front.
  */
 export const MAX_LINES = 4;
-/** Characters that fit on one line of body text at this column width. */
-const CHARS_PER_LINE = 28;
+/** Characters that fit on one line of body text at this width. */
+const CHARS_PER_LINE = 56;
 /** Everything in a row that is not body text: header, detail, preview, footer. */
-const ROW_CHROME = 142;
+const ROW_CHROME = 176;
 
 /** How many lines this post's body needs. */
 export function linesFor(body: string): number {
@@ -56,7 +56,7 @@ export function linesFor(body: string): number {
 
 /** A row's height, from its content. */
 export function rowHeight(lines: number): number {
-  return ROW_CHROME + lines * 14;
+  return ROW_CHROME + lines * 17;
 }
 /** Thumbnails generated once by the UIWorker. */
 export const ART_COUNT = 24;
