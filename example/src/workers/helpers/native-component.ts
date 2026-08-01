@@ -31,7 +31,20 @@ import NativeScript from '@nativescript/react-native';
 declare const parent: any;
 
 const g = globalThis as any;
-const objcVoid = g.interop?.types?.void;
+
+/**
+ * The interop's `void` type marker, resolved LAZILY.
+ *
+ * `interop` is installed by `NativeScript.init()`, which runs in the importing
+ * module — after this one has been evaluated. Capturing the marker at module
+ * load therefore yields `undefined`, every method gets declared as returning an
+ * object, and the runtime then tries to convert a JS `undefined` return into an
+ * Obj-C object. That crashes inside the callback trampoline, a long way from
+ * here, with no JS frame to point at.
+ */
+function objcVoidType(): any {
+  return g.interop?.types?.void;
+}
 
 export type Props = Record<string, any>;
 
@@ -73,6 +86,11 @@ export abstract class NativeComponent {
 
   /** Called after React mounted or unmounted children, with the new child count. */
   childrenChanged(_count: number): void {}
+
+  /** Called after EVERY update of this view, once RN has (re-)parented its
+   *  children into `childrenView()`. A component that moves children somewhere
+   *  else — into recycled cells, say — puts them back here. */
+  childrenUpdated(_count: number): void {}
 
   /** The view class to build in `create()` so this component's declared `events`
    *  are delivered through RN's native pipeline and its React children are routed
@@ -208,8 +226,9 @@ export function defineHostView(Base: any, events: string[]): any {
       childCounts.set(this, count);
       instance.childrenChanged(count);
     }
+    instance?.childrenUpdated(count);
   };
-  exposed.didUpdateReactSubviews = { returns: objcVoid, params: [] };
+  exposed.didUpdateReactSubviews = { returns: objcVoidType(), params: [] };
 
   for (const event of events) {
     const selector = eventSetter(event); // one colon = one param
@@ -218,7 +237,7 @@ export function defineHostView(Base: any, events: string[]): any {
       if (!map) eventHandlers.set(this, (map = {}));
       map[event] = handler;
     };
-    exposed[selector] = { returns: objcVoid, params: [g.NSObject] };
+    exposed[selector] = { returns: objcVoidType(), params: [g.NSObject] };
   }
   Sub = Base.extend(methods, {
     name: `RNWHostView_${classCounter++}`,
@@ -257,7 +276,7 @@ function controlTargetClass() {
       {
         name: 'RNWorkersControlTarget',
         exposedMethods: {
-          workerHandleAction: { returns: objcVoid, params: [] },
+          workerHandleAction: { returns: objcVoidType(), params: [] },
         },
       }
     );
@@ -299,11 +318,20 @@ export function registerComponents(classes: ComponentClass[]): Descriptor[] {
         let state = propState.get(view);
         if (!state) propState.set(view, (state = {}));
         state[prop] = toJS(json);
-        instance.update(state);
+        // RN calls this from Obj-C, so an exception here unwinds through the
+        // interop trampoline and aborts the process. Report it instead.
+        try {
+          instance.update(state);
+        } catch (err: any) {
+          const message = `[worker-component] ${name}.${prop}: ${err?.message ?? err}`;
+          const hook = (globalThis as any).__rnwComponentError;
+          if (typeof hook === 'function') hook(message);
+          else console.error(message);
+        }
       };
       exposed[`propConfig_${prop}`] = { returns: NSObject, params: [] };
       exposed[`set_${prop}:forView:withDefaultView:`] = {
-        returns: objcVoid,
+        returns: objcVoidType(),
         params: [NSObject, NSObject, NSObject],
       };
     }

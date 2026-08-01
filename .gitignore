@@ -99,3 +99,6 @@ example/dist/
 
 # Local npm auth (holds a publish token — must never be committed)
 .npmrc
+
+# social showcase output (media + posters)
+showcase/

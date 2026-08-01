@@ -10,6 +10,7 @@ import DownloadsScreen from './DownloadsScreen';
 import ImageFxScreen from './ImageFxScreen';
 import SensorScreen from './SensorScreen';
 import ParseScreen from './ParseScreen';
+import FeedScreen from './FeedScreen';
 
 export type ScreenId = string;
 
@@ -33,6 +34,12 @@ export const SCREENS: ScreenDef[] = [
     title: 'Note editor (SharedStore)',
     blurb: 'Live stats + autosave computed in a worker, zero messages',
     component: NotesScreen,
+  },
+  {
+    id: 'feed',
+    title: 'Live feed (UICollectionView in a UIWorker)',
+    blurb: '5,000 rows recycled and repainted off the JS thread — iOS only',
+    component: FeedScreen,
   },
   {
     id: 'parse',

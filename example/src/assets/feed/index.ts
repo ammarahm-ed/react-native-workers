@@ -1,0 +1,28 @@
+// The feed's thumbnails as real bundled images, so the React rows decode and
+// cache an image per row exactly like the worker's cells do.
+export const FEED_ART = [
+  require('./art-0.png'),
+  require('./art-1.png'),
+  require('./art-2.png'),
+  require('./art-3.png'),
+  require('./art-4.png'),
+  require('./art-5.png'),
+  require('./art-6.png'),
+  require('./art-7.png'),
+  require('./art-8.png'),
+  require('./art-9.png'),
+  require('./art-10.png'),
+  require('./art-11.png'),
+  require('./art-12.png'),
+  require('./art-13.png'),
+  require('./art-14.png'),
+  require('./art-15.png'),
+  require('./art-16.png'),
+  require('./art-17.png'),
+  require('./art-18.png'),
+  require('./art-19.png'),
+  require('./art-20.png'),
+  require('./art-21.png'),
+  require('./art-22.png'),
+  require('./art-23.png'),
+];
