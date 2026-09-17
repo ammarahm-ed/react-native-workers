@@ -3,6 +3,8 @@
 const fs = require('fs');
 const path = require('path');
 
+const { journalPath } = require('../shared/journal');
+
 const PACKAGE_NAME = '@ammarahmed/react-native-workers';
 const RESOLVE_EXTS = [
   '',
@@ -42,13 +44,15 @@ function toEntryId(absPath, projectRoot) {
 // worker processes; a journal + compaction avoids read-modify-write races).
 function recordEntry(projectRoot, id, absPath, fromFile) {
   try {
-    const dir = path.join(projectRoot, '.rn-workers');
-    fs.mkdirSync(dir, { recursive: true });
+    // See shared/journal.js for why this is under node_modules/.cache.
+    const logPath = journalPath(projectRoot);
+    fs.mkdirSync(path.dirname(logPath), { recursive: true });
     const line =
       JSON.stringify({ id, absPath, requestedFrom: fromFile }) + '\n';
-    fs.appendFileSync(path.join(dir, 'manifest.log'), line);
+    fs.appendFileSync(logPath, line);
   } catch (_e) {
-    // Non-fatal: dev mode does not need the manifest (Metro serves any entry).
+    // Non-fatal: dev mode does not need the manifest (Metro serves any entry),
+    // and a release build falls back to the CLI's source scan.
   }
 }
 

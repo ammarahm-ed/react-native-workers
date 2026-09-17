@@ -5,7 +5,6 @@ import {
   StyleSheet,
   ScrollView,
   DeviceEventEmitter,
-  NativeModules,
   Platform,
 } from 'react-native';
 import {
@@ -19,6 +18,7 @@ import { runConformance } from '../conformance';
 import { runBridgeTests } from '../bridgeTests';
 import { runPrimitivesTests } from '../primitivesTests';
 import { markReady } from '../devReady';
+import { resolveTestOrigin } from '../testOrigin';
 
 type Result = { name: string; pass: boolean; detail: string };
 
@@ -809,18 +809,16 @@ export default function TestsScreen() {
         // host JS thread in a busy loop, and check (on the shared clock) that the
         // response landed WHILE the host was blocked. XHR completion is a device
         // event — exactly the path that used to round-trip through the host runtime.
+        const netIsolationOrigin = await resolveTestOrigin();
         const netIsolation = await new Promise<any>((resolve) => {
           try {
-            const src = NativeModules?.SourceCode?.getConstants?.().scriptURL;
-            const origin = src
-              ? String(src).match(/^https?:\/\/[^/]+/)?.[0]
-              : null;
-            if (!origin) {
+            if (!netIsolationOrigin) {
               // NOT a pass: this is the test that proves the host JS thread is
               // uninvolved, and silently skipping it in release/dev-client builds
               // made a green suite mean nothing.
               resolve({
-                __unrunnable: 'no dev-server origin (release bundle)',
+                __unrunnable:
+                  'no HTTP origin: this bundle has no dev server, and the in-app test server did not start',
               });
               return;
             }
@@ -837,7 +835,7 @@ export default function TestsScreen() {
               // Worker is up and its module graph is evaluated: only now does the
               // measurement mean anything, so start the request and pin the thread.
               if (e.data?.phase === 'ready') {
-                w.postMessage({ url: `${origin}/status` });
+                w.postMessage({ url: `${netIsolationOrigin}/status` });
                 blockStart = Date.now();
                 // Long enough that a slow Metro reply cannot make a WORKING
                 // implementation fail by finishing after the pin ends.
@@ -1153,19 +1151,17 @@ export default function TestsScreen() {
         //
         // A worker's XHR emits RN networking device events. If those were still
         // raised on the host runtime, the host listener below would see them.
+        const eventIsolationOrigin = await resolveTestOrigin();
         const eventIsolation = await new Promise<any>((resolve) => {
           try {
-            const src = NativeModules?.SourceCode?.getConstants?.().scriptURL;
-            const origin = src
-              ? String(src).match(/^https?:\/\/[^/]+/)?.[0]
-              : null;
-            if (!origin) {
+            if (!eventIsolationOrigin) {
               resolve({
-                __unrunnable: 'no dev-server origin (release bundle)',
+                __unrunnable:
+                  'no HTTP origin: this bundle has no dev server, and the in-app test server did not start',
               });
               return;
             }
-            const url = `${origin}/status`;
+            const url = `${eventIsolationOrigin}/status`;
             // Counting every networking event on the host is not an isolation
             // measurement: in dev the host runtime has its own traffic (Metro,
             // HMR, the log stream), so a bare count is ambient noise and failed

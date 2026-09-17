@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug builds additionally need cleartext to reach Metro, which is served over
+  plain HTTP from the dev machine — reachable as `localhost` when adb reverse is
+  in play, or as the machine's LAN address when it is not. Overrides the
+  release-scoped config in src/main/res/xml.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

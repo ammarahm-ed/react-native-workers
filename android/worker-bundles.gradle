@@ -36,7 +36,7 @@ def rnWorkersNodeCommand = {
   return ["node"]
 }
 
-// The JS project root (where package.json / metro.config.js / .rn-workers live).
+// The JS project root (where package.json / metro.config.js / node_modules live).
 // Mirrors the RN plugin's `react { root }`, defaulting to two levels above the
 // Android app module (…/android/app -> project root).
 def rnWorkersJsRoot = {

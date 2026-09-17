@@ -11,7 +11,8 @@
  * worker bundle next to the app's `main.jsbundle`.
  *
  * Entry discovery has two sources, in order:
- *   1. The babel-plugin journal at `<cwd>/.rn-workers/manifest.log` (fast path;
+ *   1. The babel-plugin journal at
+ *      `<cwd>/node_modules/.cache/react-native-workers/manifest.log` (fast path;
  *      populated as Metro transforms the app for the main bundle).
  *   2. A static AST scan of the project source (cold-CI fallback), used when
  *      the journal is empty or every entry it lists has gone stale.
@@ -24,6 +25,8 @@
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
+
+const { journalPath } = require('../shared/journal');
 
 const PACKAGE_NAME = '@ammarahmed/react-native-workers';
 
@@ -183,13 +186,13 @@ function toEntryId(absPath, projectRoot) {
 // ---------------------------------------------------------------------------
 
 /**
- * Read + compact `.rn-workers/manifest.log` into a deduped list of
- * `{ id, absPath }`. Later lines win (the plugin appends on every transform).
- * Entries whose `absPath` no longer exists are dropped with a warning so
- * truncation is never silent.
+ * Read + compact the plugin's journal (see shared/journal.js for its location)
+ * into a deduped list of `{ id, absPath }`. Later lines win (the plugin appends
+ * on every transform). Entries whose `absPath` no longer exists are dropped with
+ * a warning so truncation is never silent.
  */
 function readJournal(projectRoot) {
-  const logPath = path.join(projectRoot, '.rn-workers', 'manifest.log');
+  const logPath = journalPath(projectRoot);
   let raw;
   try {
     raw = fs.readFileSync(logPath, 'utf8');
@@ -242,7 +245,6 @@ const IGNORE_DIRS = new Set([
   'build',
   'lib',
   'dist',
-  '.rn-workers',
 ]);
 
 function collectSourceFiles(dir, out) {

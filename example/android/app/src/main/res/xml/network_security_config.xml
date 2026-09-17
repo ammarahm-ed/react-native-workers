@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Release builds talk to the app's own loopback test server (TestHttpServerModule),
+  so `http://127.0.0.1:<port>` has to be permitted. Previously this was covered by
+  the `usesCleartextTraffic` manifest placeholder, which release sets to false — and
+  which Android ignores anyway once a network security config is present.
+
+  Scope it to the loopback address: nothing else in a release build should be
+  reached over cleartext. Debug builds override this file (src/debug/res/xml) to
+  also allow the Metro dev server on a LAN address.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+    </domain-config>
+</network-security-config>
