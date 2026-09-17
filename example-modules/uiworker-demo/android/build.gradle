@@ -2,7 +2,8 @@ buildscript {
   ext.UIWorkerDemo = [
     kotlinVersion: "2.0.21",
     minSdkVersion: 24,
-    compileSdkVersion: 36
+    compileSdkVersion: 36,
+    ndkVersion: "27.1.12297006"
   ]
 
   ext.getExtOrDefault = { prop ->
@@ -38,6 +39,10 @@ def reactNativeArchitectures() {
 
 android {
   namespace "com.uiworkerdemo"
+
+  // Must match the app. AGP would otherwise fall back to its own default NDK,
+  // which need not be installed on the machine doing the build.
+  ndkVersion getExtOrDefault("ndkVersion")
 
   compileSdkVersion getExtOrDefault("compileSdkVersion")
 
