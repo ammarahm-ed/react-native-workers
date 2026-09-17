@@ -9,7 +9,8 @@ tooling that produces those bundles.
 
 1. **Discovery at transform time.** The Babel plugin (`plugin/index.js`) rewrites
    `new Worker('./x')` into `new Worker(__workerRef('<id>'))` and appends a line to
-   a journal at `<projectRoot>/.rn-workers/manifest.log` for every worker it sees.
+   a journal at `<projectRoot>/node_modules/.cache/react-native-workers/manifest.log`
+   for every worker it sees.
    Each line is one JSON object: `{"id","absPath","requestedFrom"}`. The `id` is
    the project-relative path without extension (posix separators).
 
@@ -48,7 +49,8 @@ rn-workers-bundle --platform <ios|android> --out <dir> [options]
 
 Run `node cli/index.js --help` for the full flag list. Run it from the app's
 project root (or pass `--project-root`) so it resolves the app's Metro config and
-reads the app's `.rn-workers/manifest.log`.
+reads the app's `node_modules/.cache/react-native-workers/manifest.log`. The
+journal needs no `.gitignore` entry — it lives under `node_modules`.
 
 ## Installation
 
