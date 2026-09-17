@@ -96,6 +96,8 @@ example/dist/
 
 # Local compatibility-matrix runner scratch apps (scripts/matrix.mjs)
 .matrix/
+.local
 
 # Local npm auth (holds a publish token — must never be committed)
 .npmrc
+
