@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { runBridgeTests } from './src/bridgeTests';
 import { runConformance } from './src/conformance';
+import { runDesktopTests } from './src/desktopTests';
 import { runPrimitivesTests } from './src/primitivesTests';
 
 type Line = { suite: string; name: string; pass: boolean; detail: string };
@@ -52,6 +53,7 @@ export default function App() {
       await run('conformance', runConformance);
       await run('primitives', runPrimitivesTests as never);
       await run('bridge', runBridgeTests as never);
+      await run('desktop', runDesktopTests);
       if (!cancelled) setDone(true);
     })();
     return () => {

@@ -17,6 +17,7 @@ module.exports = {
       desktop: {
         cmake: 'desktop',
         cppProvider: 'create_gpui_workers_module',
+        bundleHook: 'cli/desktop-bundle.js',
       },
     },
   },
