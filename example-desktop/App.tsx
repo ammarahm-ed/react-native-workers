@@ -7,17 +7,6 @@ import { runPrimitivesTests } from './src/primitivesTests';
 
 type Line = { suite: string; name: string; pass: boolean; detail: string };
 
-// Two checks measure when the JavaScript engine frees an object a runtime no
-// longer references. On this desktop Hermes a SharedBuffer's ArrayBuffer and a
-// SharedStore handle outlive a forced collection that frees them on the mobile
-// builds (a SharedStore is freed once a task has passed; a SharedBuffer is not
-// freed within the checked window). They say nothing about messaging, so they
-// are reported as known and do not fail the run.
-const KNOWN = [
-  'SharedBuffer freed when unreferenced',
-  'SharedStore freed when unreferenced',
-];
-
 export default function App() {
   const [lines, setLines] = useState<Line[]>([]);
   const [done, setDone] = useState(false);
@@ -35,7 +24,7 @@ export default function App() {
             out.push({
               suite,
               name: test.name,
-              pass: test.pass || KNOWN.includes(test.name),
+              pass: test.pass,
               detail: String(test.detail),
             });
             if (!cancelled) setLines([...out]);

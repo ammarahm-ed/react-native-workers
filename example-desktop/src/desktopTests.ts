@@ -39,8 +39,16 @@ export async function runDesktopTests(): Promise<Result[]> {
     const worker = new Worker(
       {
         inline: `self.onmessage = () => {
-          const constants = globalThis.__turboModuleProxy && globalThis.__turboModuleProxy('PlatformConstants');
-          self.postMessage({ hasModule: !!constants });
+          const proxy = globalThis.nativeModuleProxy;
+          const has = (name) => { try { return !!proxy[name]; } catch (e) { return String(e); } };
+          self.postMessage({
+            hasModule: has('Appearance') === true,
+            appearance: has('Appearance'),
+            workers: has('ReactNativeWorkers'),
+            platform: has('PlatformConstants'),
+            deviceInfo: has('DeviceInfo'),
+            fs: has('RNFsModule'),
+          });
         };`,
       },
       { nativeModules: true }

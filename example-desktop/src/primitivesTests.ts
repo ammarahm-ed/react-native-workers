@@ -27,6 +27,14 @@ const PROBE = `
   });
 `;
 
+// Runs `fn` and returns, so what it created has no live reference left. The
+// body goes through a helper rather than an inline `(() => {...})()`: on
+// desktop's Hermes an object created by a function called directly from the
+// test body can still be reachable when the collection runs right after it.
+function dropped(fn: () => void): void {
+  fn();
+}
+
 export async function runPrimitivesTests(): Promise<Result[]> {
   // Shared cells/buffers/stores live in a PROCESS-wide native registry, so they
   // outlive the JS runtime: a Fast Refresh or dev reload recreates the bundle
@@ -120,10 +128,10 @@ export async function runPrimitivesTests(): Promise<Result[]> {
       // Refcounting: a cell referenced by nothing is freed automatically, so the
       // name goes stale and re-opening re-seeds. No delete() call involved.
       const gcName = NS + 'gc';
-      (() => {
+      dropped(() => {
         const tmp = new SharedValue(gcName, 1);
         tmp.value = 555; // handle dies with this scope
-      })();
+      });
       (globalThis as any).__rnworkersCollectGarbage();
       const afterGc = new SharedValue(gcName, 7).value;
       push('SharedValue freed when unreferenced', afterGc === 7, afterGc);
@@ -188,10 +196,10 @@ export async function runPrimitivesTests(): Promise<Result[]> {
       // Refcounting. The owner of the memory is the ArrayBuffer itself, so the
       // wrapper AND every typed-array view over it must go before it is freed.
       const gcBuf = NS + 'gcbuf';
-      (() => {
+      dropped(() => {
         const b = new SharedBuffer(gcBuf, LEN);
         new Float64Array(b.arrayBuffer)[0] = 555;
-      })();
+      });
       (globalThis as any).__rnworkersCollectGarbage();
       const freshBuf = new SharedBuffer(gcBuf, LEN);
       push(
@@ -202,10 +210,10 @@ export async function runPrimitivesTests(): Promise<Result[]> {
       // A freed name is also free to come back at a DIFFERENT length — the size
       // is fixed by the first *live* opener, not by the name for all time.
       const relen = NS + 'relen';
-      (() => {
+      dropped(() => {
         // eslint-disable-next-line no-new
         new SharedBuffer(relen, 64);
-      })();
+      });
       (globalThis as any).__rnworkersCollectGarbage();
       const wider = new SharedBuffer(relen, 256);
       push('SharedBuffer name reusable at new size', wider.byteLength === 256, {
@@ -286,9 +294,9 @@ export async function runPrimitivesTests(): Promise<Result[]> {
     {
       // Dropped store → freed → the name comes back empty.
       const gcStore = NS + 'gcstore';
-      (() => {
+      dropped(() => {
         new SharedStore(gcStore).set('state', { a: 555 });
-      })();
+      });
       (globalThis as any).__rnworkersCollectGarbage();
       const afterGc = new SharedStore(gcStore).get('state');
       push('SharedStore freed when unreferenced', afterGc === undefined, {

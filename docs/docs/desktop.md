@@ -57,12 +57,6 @@ to a worker.
 - **UI workers** (`UIWorker`) use the app's main thread through a desktop scheduler. They are implemented but have not been run on desktop yet.
 - **`Blob`** is not available in a worker, as on mobile; use `SharedBuffer`.
 - **Inspector**: worker runtimes are not debug targets on desktop yet.
-- **Garbage collection checks.** Two of the library's own checks, that an
-  unreferenced `SharedBuffer` or `SharedStore` is freed by a forced collection,
-  do not hold on desktop's Hermes: a `SharedStore` is freed after a task has
-  passed and a `SharedBuffer` is not freed in the time the check waits. Nothing
-  about messaging is affected, but memory behind a dropped `SharedBuffer` is
-  returned later than on mobile.
 - Windows and Linux compile from the same files; only macOS has been run.
 
 ## Example and tests
