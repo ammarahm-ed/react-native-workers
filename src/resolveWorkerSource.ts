@@ -28,6 +28,12 @@ export function workerAssetName(id: string): string {
   return 'workers/' + id.replace(/[^a-zA-Z0-9]+/g, '_') + '.jsbundle';
 }
 
+/** The platform name Metro knows this OS by: the desktop OSes share one bundle. */
+function metroPlatform(): string {
+  const os: string = Platform.OS;
+  return os === 'macos' || os === 'windows' || os === 'linux' ? 'desktop' : os;
+}
+
 function metroBundleUrl(id: string): string {
   const scriptURL: string | undefined =
     (NativeModules as any)?.SourceCode?.getConstants?.().scriptURL ??
@@ -48,7 +54,7 @@ function metroBundleUrl(id: string): string {
   // instead of the full barrel. It must match the flag the release CLI passes,
   // or a worker would bundle differently in dev than it ships.
   const query =
-    `platform=${Platform.OS}&dev=true&minify=false&modulesOnly=false&runModule=true` +
+    `platform=${metroPlatform()}&dev=true&minify=false&modulesOnly=false&runModule=true` +
     `&resolver.rnworkers=true`;
   return `${origin}/${id}.bundle?${query}`;
 }

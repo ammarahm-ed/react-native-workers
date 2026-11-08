@@ -14,6 +14,10 @@ module.exports = {
         cxxModuleCMakeListsPath: 'CMakeLists.txt',
         cxxModuleHeaderName: 'ReactNativeWorkersImpl',
       },
+      desktop: {
+        cmake: 'desktop',
+        cppProvider: 'create_gpui_workers_module',
+      },
     },
   },
 };

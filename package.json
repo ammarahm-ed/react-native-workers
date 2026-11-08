@@ -26,6 +26,7 @@
     "lib",
     "android",
     "ios",
+    "desktop",
     "cpp",
     "plugin",
     "cli",
