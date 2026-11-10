@@ -55,16 +55,9 @@ android {
   // no-op: ensures the android extension exists before we query variants.
 }
 
-afterEvaluate { proj ->
-  def androidExt = proj.extensions.findByName("android")
-  if (androidExt == null || androidExt.applicationVariants == null) {
-    proj.logger.warn("[rn-workers] android application extension not found; " +
-      "worker bundling tasks were not registered.")
-    return
-  }
-
-  androidExt.applicationVariants.all { variant ->
-    def buildTypeName = variant.buildType.name
+def androidComponents = project.extensions.getByName("androidComponents")
+androidComponents.onVariants(androidComponents.selector().all()) { variant ->
+    def buildTypeName = variant.buildType
     // Skip debug variants — dev workers are fetched from Metro at runtime.
     if (buildTypeName.toLowerCase().contains("debug")) {
       return
@@ -72,20 +65,22 @@ afterEvaluate { proj ->
 
     def variantName = variant.name
     def capVariant = variantName.capitalize()
-    def generatedAssetsDir = proj.layout.buildDirectory
-      .dir("generated/rnworkers/${variantName}").get().asFile
+    def generatedAssetsDir = project.layout.buildDirectory
+      .dir("generated/rnworkers/${variantName}")
 
     def nodeCommand = rnWorkersNodeCommand()
     def jsRoot = rnWorkersJsRoot()
 
-    def workerTask = proj.tasks.register("bundle${capVariant}WorkerJs") { task ->
+    def workerTask = project.tasks.register("bundle${capVariant}WorkerJs") { task ->
       task.group = "react-native-workers"
       task.description = "Bundle release worker JS for the ${variantName} variant."
+      task.ext.workerAssetsDir = project.objects.directoryProperty()
+      task.workerAssetsDir.set(generatedAssetsDir)
 
       // The worker entry set is resolved dynamically (journal + discovery), so
       // Gradle cannot reliably fingerprint the inputs. Declare the output dir
       // and mark the task never-up-to-date, and log that we're doing so.
-      task.outputs.dir(generatedAssetsDir)
+      task.outputs.dir(task.workerAssetsDir)
       task.outputs.upToDateWhen { false }
 
       task.doFirst {
@@ -94,8 +89,9 @@ afterEvaluate { proj ->
       }
 
       task.doLast {
-        generatedAssetsDir.deleteDir()
-        generatedAssetsDir.mkdirs()
+        def assetsDir = task.workerAssetsDir.get().asFile
+        assetsDir.deleteDir()
+        assetsDir.mkdirs()
 
         def cmd = []
         cmd.addAll(nodeCommand)
@@ -103,7 +99,7 @@ afterEvaluate { proj ->
         cmd.addAll([
           "--platform", "android",
           "--dev", "false",
-          "--out", generatedAssetsDir.absolutePath,
+          "--out", assetsDir.absolutePath,
           "--project-root", jsRoot.absolutePath,
         ])
 
@@ -129,21 +125,7 @@ afterEvaluate { proj ->
       }
     }
 
-    // Register the generated assets so the worker bundles land in the APK.
-    // Prefer the variant-scoped source set; fall back to the build type's.
-    //
-    // The srcDir is the TASK PROVIDER, not the bare directory: that makes the
-    // resulting file collection carry a dependency on the task that produces it,
-    // so every consumer of the assets source set (asset merging, but also lint's
-    // model tasks and packaging) is ordered after it automatically. Passing the
-    // plain File instead makes Gradle 8+ fail validation with "uses this output
-    // ... without declaring an explicit or implicit dependency" for each such
-    // consumer — a list we would otherwise have to enumerate and keep current.
-    try {
-      androidExt.sourceSets.getByName(variantName).assets.srcDir(workerTask)
-    } catch (ignored) {
-      androidExt.sourceSets.getByName(buildTypeName).assets.srcDir(workerTask)
-    }
+    variant.sources.assets.addGeneratedSourceDirectory(workerTask) { task -> task.workerAssetsDir }
 
     // Ordering: run after the main JS bundle is produced, and before the assets
     // for this variant are merged into the APK.
@@ -155,10 +137,9 @@ afterEvaluate { proj ->
     // set cannot be executed in the current context").
     workerTask.configure { task ->
       task.mustRunAfter(
-        proj.tasks.matching { it.name == "createBundle${capVariant}JsAndAssets" }
+        project.tasks.matching { it.name == "createBundle${capVariant}JsAndAssets" }
       )
     }
-    proj.tasks.matching { it.name == "merge${capVariant}Assets" }
+    project.tasks.matching { it.name == "merge${capVariant}Assets" }
       .configureEach { it.dependsOn(workerTask) }
-  }
 }
