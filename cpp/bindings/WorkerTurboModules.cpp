@@ -35,7 +35,8 @@ bool isWorkerModuleDenied(const std::string& name) {
 // there (avoiding a duplicate symbol):
 //   - iOS:     ios/WorkerTurboModules.mm (RCTTurboModuleManager, ObjC modules)
 //   - Android: cpp/bindings/WorkerTurboModulesAndroid.cpp (Java TurboModules)
-#if !defined(__APPLE__) && !defined(__ANDROID__)
+//   - Desktop (react-native-gpui): desktop/cpp/WorkerTurboModulesDesktop.cpp
+#if !defined(__APPLE__) && !defined(__ANDROID__) && !defined(RN_WORKERS_DESKTOP)
 
 #include <ReactCommon/CxxTurboModuleUtils.h>
 #include <ReactCommon/TurboModule.h>
@@ -72,4 +73,4 @@ std::function<void(Runtime&)> installWorkerTurboModules(
 
 } // namespace facebook::react::workers
 
-#endif // !__APPLE__
+#endif // generic fallback

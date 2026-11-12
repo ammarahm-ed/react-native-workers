@@ -1,0 +1,40 @@
+{
+  "name": "react-native-workers-desktop-example",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "start": "react-native start",
+    "desktop": "react-native run-desktop",
+    "test:e2e": "vitest run --config desktop/vitest.e2e.config.ts"
+  },
+  "dependencies": {
+    "@ammarahmed/react-native-workers": "file:..",
+    "@react-native-gpui/codegen": "file:/Users/ammarahmed/Work/react-native-gpui-desktop-native-modules/packages/codegen",
+    "@react-native-gpui/core": "file:/Users/ammarahmed/Work/react-native-gpui-desktop-native-modules/packages/core",
+    "@react-native-gpui/hermes": "file:/Users/ammarahmed/Work/react-native-gpui-desktop-native-modules/packages/hermes",
+    "react": "19.2.3",
+    "react-native": "0.87.1",
+    "@react-native-gpui/cli": "file:/Users/ammarahmed/Work/react-native-gpui-desktop-native-modules/packages/cli"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.25.2",
+    "@babel/preset-env": "^7.25.3",
+    "@babel/runtime": "^7.25.0",
+    "@react-native-community/cli": "20.2.0",
+    "@react-native-gpui/testing": "file:/Users/ammarahmed/Work/react-native-gpui-desktop-native-modules/packages/testing",
+    "@react-native/babel-preset": "0.87.1",
+    "@react-native/metro-config": "0.87.1",
+    "@types/react": "^19.2.0",
+    "typescript": "^6.0.3",
+    "vitest": "^3.2.4"
+  },
+  "overrides": {
+    "@react-native-gpui/codegen": "file:/Users/ammarahmed/Work/react-native-gpui-desktop-native-modules/packages/codegen",
+    "@react-native-gpui/core": "file:/Users/ammarahmed/Work/react-native-gpui-desktop-native-modules/packages/core",
+    "@react-native-gpui/hermes": "file:/Users/ammarahmed/Work/react-native-gpui-desktop-native-modules/packages/hermes",
+    "@react-native-gpui/cli": "file:/Users/ammarahmed/Work/react-native-gpui-desktop-native-modules/packages/cli"
+  },
+  "engines": {
+    "node": ">= 22.11.0"
+  }
+}

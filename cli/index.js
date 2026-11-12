@@ -42,10 +42,11 @@ function workerAssetName(id) {
 const HELP = `rn-workers-bundle — build standalone release bundles for react-native-workers
 
 Usage:
-  rn-workers-bundle --platform <ios|android> --out <dir> [options]
+  rn-workers-bundle --platform <ios|android|desktop> --out <dir> [options]
 
 Required:
-  --platform <ios|android>   Target platform.
+  --platform <ios|android|desktop>   Target platform; desktop is react-native-gpui
+                             (macOS, Windows and Linux).
   --out <dir>                Output directory for worker bundles (should match
                              the main bundle's resources dir / assetsDest).
 
@@ -509,8 +510,30 @@ function hermesOsBin() {
 //   * RN >= 0.86 — the `hermes-compiler` npm package, a sibling of react-native.
 //   * RN <= 0.85 — `react-native/sdks/hermesc/<os>-bin/`.
 //   * Building Hermes from source — `react-native/sdks/hermes/build/bin/`.
-function locateHermesc(projectRoot, reactNativePath) {
+function locateHermesc(projectRoot, reactNativePath, platform) {
   const bin = process.platform === 'win32' ? 'hermesc.exe' : 'hermesc';
+
+  // A desktop app runs the Hermes of @react-native-gpui/hermes, which ships its
+  // own compiler per OS and architecture. Bytecode is locked to that VM, so it
+  // is the only compiler that may be used.
+  if (platform === 'desktop') {
+    try {
+      const hermesRoot = path.dirname(
+        require.resolve('@react-native-gpui/hermes/package.json', {
+          paths: [projectRoot],
+        })
+      );
+      const candidate = path.join(
+        hermesRoot,
+        'bin',
+        `${process.platform}-${process.arch}`,
+        bin
+      );
+      return fs.existsSync(candidate) ? candidate : null;
+    } catch (_e) {
+      return null;
+    }
+  }
 
   // Resolve `hermes-compiler` starting from a given directory, or null.
   const npmCompilerFrom = (from) => {
@@ -626,11 +649,11 @@ async function main() {
   }
 
   if (!args.platform) {
-    throw new Error('--platform <ios|android> is required');
+    throw new Error('--platform <ios|android|desktop> is required');
   }
-  if (args.platform !== 'ios' && args.platform !== 'android') {
+  if (!['ios', 'android', 'desktop'].includes(args.platform)) {
     throw new Error(
-      `--platform must be "ios" or "android" (got "${args.platform}")`
+      `--platform must be "ios", "android" or "desktop" (got "${args.platform}")`
     );
   }
   if (!args.out) {
@@ -722,7 +745,7 @@ async function main() {
   // 4. Optional Hermes compilation.
   let hermesc = args.hermes;
   if (!hermesc) {
-    hermesc = locateHermesc(projectRoot, config.reactNativePath);
+    hermesc = locateHermesc(projectRoot, config.reactNativePath, args.platform);
     if (hermesc) {
       console.error(`rn-workers-bundle: found hermesc at ${hermesc}`);
       // Bytecode is version-locked to the runtime. A compiler from outside the
